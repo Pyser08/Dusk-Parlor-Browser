@@ -1,7 +1,7 @@
 import WebKit
 
 /// 페이지의 console.error/warn, 잡히지 않은 오류, 플러그인 관련 흔적을 네이티브 링버퍼에 모아 두고,
-/// 웹 프로세스가 죽으면 '파일' 앱(Dusk Browser 폴더 > crashlogs)에 남긴다.
+/// 웹 프로세스가 죽으면 '파일' 앱(Dusk Parlor Browser 폴더 > crashlogs)에 남긴다.
 /// 웹 프로세스는 죽는 순간 아무것도 못 남기므로, 로그는 평소에 네이티브로 미리 보내 둔다.
 final class CrashLog: NSObject, WKScriptMessageHandler {
     var siteID = ""

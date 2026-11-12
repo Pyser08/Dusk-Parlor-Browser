@@ -1,4 +1,4 @@
-name: DuskBrowser
+name: DuskParlor
 options:
   bundleIdPrefix: com.pyser08
   deploymentTarget:
@@ -11,15 +11,15 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGNING_ALLOWED: "NO"
 targets:
-  DuskBrowser:
+  DuskParlor:
     type: application
     platform: iOS
     sources:
-      - path: DuskBrowser
+      - path: DuskParlor
     info:
-      path: DuskBrowser/Info.plist
+      path: DuskParlor/Info.plist
       properties:
-        CFBundleDisplayName: Dusk Browser
+        CFBundleDisplayName: Dusk Parlor Browser
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

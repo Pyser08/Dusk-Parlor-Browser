@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct DuskBrowserApp: App {
+struct DuskParlorApp: App {
     @StateObject private var store = SiteStore()
 
     var body: some Scene {
@@ -32,7 +32,7 @@ struct SiteListView: View {
                 }
                 .onDelete(perform: store.remove)
             }
-            .navigationTitle("Dusk Browser")
+            .navigationTitle("Dusk Parlor Browser")
             .navigationDestination(for: Site.self) { site in
                 BrowserView(site: site)
                     .ignoresSafeArea(.container, edges: .bottom)
