@@ -1,0 +1,5 @@
+[
+  { "id": "risuai", "name": "RisuAI", "url": "https://risuai.xyz/", "extraHosts": [] },
+  { "id": "risubard", "name": "RisuBard", "url": "https://example.com/", "extraHosts": [] },
+  { "id": "pocketrisu", "name": "PocketRisu", "url": "https://example.org/", "extraHosts": [] }
+]

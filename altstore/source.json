@@ -1,0 +1,24 @@
+{
+  "name": "Dusk Browser",
+  "identifier": "com.pyser08.duskbrowser.source",
+  "sourceURL": "https://raw.githubusercontent.com/Pyser08/Dusk-Browser/main/altstore/source.json",
+  "apps": [
+    {
+      "name": "Dusk Browser",
+      "bundleIdentifier": "com.pyser08.DuskBrowser",
+      "developerName": "Pyser08",
+      "localizedDescription": "RisuAI와 그 포크 전용 브라우저",
+      "iconURL": "",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "date": "2026-11-12",
+          "downloadURL": "https://github.com/Pyser08/Dusk-Browser/releases/download/v0.1.0/DuskBrowser.ipa",
+          "size": 0,
+          "minOSVersion": "17.0"
+        }
+      ]
+    }
+  ],
+  "news": []
+}
