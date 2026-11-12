@@ -29,4 +29,8 @@ CI(`.github/workflows/ios.yml`)는 `v*` 태그를 푸시하면 서명 없는 IPA
 3. 데스크톱(Tauri) 셸
 
 ## 라이선스
-All rights reserved. 저작권자(Pyser08)의 허락 없이 복제, 수정, 배포, 이용할 수 없어요. 자세한 내용은 `LICENSE`를 보세요.
+GNU Affero General Public License v3.0 (AGPL-3.0)이에요. 전문은 `LICENSE`에 있어요.
+
+이 앱은 RisuAI(kwaroran/RisuAI, GPL-3.0)의 코드를 함께 묶어 쓸 예정이에요. GPL-3.0 제13조에 따라 AGPL-3.0 저작물과 결합할 수 있어요.
+
+Copyright (C) 2026 Pyser08
