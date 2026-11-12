@@ -102,7 +102,11 @@ export async function startMirror(o) {
 
   async function proxy(req, res, url) {
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405).end(); return; }
-    const r = await fetch(new URL(url.pathname + url.search, target), { method: req.method, redirect: 'manual' });
+    const dest = new URL(url.pathname + url.search, target);
+    // 리스바드 등은 HttpOnly 세션 쿠키로 파일을 지키므로 서버 Chrome의 쿠키를 그대로 붙인다.
+    const { cookies } = await page.send('Network.getCookies', { urls: [dest.href] });
+    const reqHeaders = cookies.length ? { cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; ') } : {};
+    const r = await fetch(dest, { method: req.method, redirect: 'manual', headers: reqHeaders });
     const headers = {};
     r.headers.forEach((v, k) => { if (!HOP.has(k)) headers[k] = v; });
     res.writeHead(r.status, headers);

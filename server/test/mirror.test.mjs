@@ -15,7 +15,14 @@ const FIXTURE = `<!doctype html><html class="dark"><head>
 <ul id="list"></ul>
 <textarea id="t"></textarea>
 <img id="img">
+<img id="secure" src="/secure.png">
+<button id="frame">frame</button>
 <script>
+frame.onclick = () => {
+  const f = document.createElement('iframe');
+  f.srcdoc = '<html><head><style>p{}</style><script>1<\\/script></head><body></body></html>';
+  document.body.appendChild(f);
+};
 let n = 0;
 b.onclick = () => { b.textContent = 'count:' + (++n); };
 t.addEventListener('keydown', (e) => {
@@ -54,8 +61,12 @@ const tap = async (sel) => {
 
 before(async () => {
   fixture = http.createServer((req, res) => {
-    if (req.url === '/a.css') res.writeHead(200, { 'content-type': 'text/css' }).end('#b{width:200px}');
-    else res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(FIXTURE);
+    if (req.url === '/secure.png') {
+      // 리스바드처럼 HttpOnly 세션 쿠키가 있어야만 주는 파일
+      if (/(?:^|;\s*)sess=ok(?:;|$)/.test(req.headers.cookie || '')) res.writeHead(200, { 'content-type': 'image/png' }).end(Buffer.from(PNG, 'base64'));
+      else res.writeHead(401).end();
+    } else if (req.url === '/a.css') res.writeHead(200, { 'content-type': 'text/css' }).end('#b{width:200px}');
+    else res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'sess=ok; Path=/; HttpOnly; SameSite=Strict' }).end(FIXTURE);
   });
   await new Promise((r) => fixture.listen(0, '127.0.0.1', r));
   mirror = await startMirror({ target: `http://127.0.0.1:${fixture.address().port}/`, port: 0, host: '127.0.0.1' });
@@ -90,6 +101,10 @@ test('blob 이미지가 서버 경유 주소로 보임', async () => {
   assert.match(await evalOn(`document.querySelector('#img').getAttribute('src')`), /^\/__parlor\/blob\?u=blob%3A/);
 });
 
+test('로그인 쿠키가 필요한 파일도 서버 Chrome의 쿠키로 받아 옴', async () => {
+  await waitFor(`document.querySelector('#secure')?.naturalWidth === 1`);
+});
+
 test('폰에서 누르면 서버에서 클릭되고 결과가 돌아옴', async () => {
   await tap('#b');
   await waitFor(`document.querySelector('#b').textContent === 'count:1'`);
@@ -105,6 +120,15 @@ test('한글 입력 후 Enter → 서버에서 전송되고 입력칸이 비워�
   await waitFor(`document.querySelector('#list li')?.textContent === 'msg:안녕하세요'`);
   await waitFor(`document.querySelector('#t').value === ''`);
   assert.equal(await mirror.evaluate(`document.querySelector('#list').children.length`), 1);
+});
+
+test('iframe이 생겨도 폰 화면이 iframe 문서로 바뀌지 않음', async () => {
+  await tap('#frame');
+  await waitFor(`document.querySelector('iframe') !== null`);
+  // iframe 쪽 스냅샷이 오면 화면이 통째로 바뀌므로 잠깐 기다린 뒤 확인
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(await evalOn(`document.querySelector('#b')?.textContent`), 'count:2');
+  assert.equal(await evalOn(`document.body?.parentNode === document.documentElement`), true);
 });
 
 test('토큰을 설정하면 토큰 없이 접근할 수 없음', async () => {

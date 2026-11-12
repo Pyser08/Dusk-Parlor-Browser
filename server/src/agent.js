@@ -1,7 +1,9 @@
 // 서버 Chrome의 리수 페이지 안에 주입되는 스크립트.
 // DOM을 직렬화하고, 바뀐 부분만 __parlorEmit 바인딩으로 내보낸다.
 (() => {
-  if (window.__parlor) return;
+  // 같은 출처 iframe(about:srcdoc 등)에도 주입되므로 최상위 문서에서만 동작한다.
+  // 그러지 않으면 iframe의 snap이 폰 화면 전체를 덮어쓴다.
+  if (window.__parlor || window !== window.top) return;
   const emit = (ops) => { if (ops.length) try { window.__parlorEmit(JSON.stringify(ops)); } catch {} };
 
   const ids = new WeakMap();
