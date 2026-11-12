@@ -15,6 +15,7 @@ final class BrowserViewController: UIViewController {
     private var webView: WKWebView!
     private let hud = MemoryHUD()
     private let bridge = DraftBridge()
+    private let crashLog = CrashLog()
     private var lastURL: URL?
     private var memoryObserver: NSObjectProtocol?
 
@@ -43,6 +44,7 @@ final class BrowserViewController: UIViewController {
             forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
         ) { [weak self] _ in
             self?.hud.noteMemoryWarning()
+            self?.crashLog.note("memory warning")
             // 페이지 쪽에서 이미지 캐시 등을 비울 수 있도록 신호만 보낸다.
             self?.webView.evaluateJavaScript("window.dispatchEvent(new Event('dusk-memory-warning'))")
         }
@@ -66,6 +68,8 @@ final class BrowserViewController: UIViewController {
 
         bridge.siteID = site.id
         bridge.install(into: config.userContentController)
+        crashLog.siteID = site.id
+        crashLog.install(into: config.userContentController)
 
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.navigationDelegate = self
@@ -119,6 +123,7 @@ extension BrowserViewController: WKNavigationDelegate {
     /// OOM 등으로 WebContent 프로세스가 종료됐을 때
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         hud.noteCrash()
+        crashLog.dump(reason: "web content process terminated")
         let target = lastURL ?? site.url
         webView.load(URLRequest(url: target))
     }
