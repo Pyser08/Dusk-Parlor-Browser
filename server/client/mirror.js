@@ -2,11 +2,16 @@
 // 프레임(플러그인 iframe)마다 Doc 하나. 최상위는 키 'top'. (DESIGN-frames.md)
 (() => {
   // 입력은 순서가 중요하니 한 줄로 세워 보낸다.
-  let chain = Promise.resolve();
+  // 서버는 지금 탭을 쓰는 폰(sid)의 입력만 받는다. sid는 스트림 첫 메시지(hello)로 받으므로 그 전 입력은 기다린다.
+  let sid = '';
+  let gotSid;
+  const ready = new Promise((r) => { gotSid = r; });
+  const H = (extra) => ({ 'x-parlor-sid': sid, ...extra });
+  let chain = ready;
   const post = (path, body) => {
     chain = chain.then(() => fetch('/__parlor/' + path, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: H({ 'content-type': 'application/json' }),
       body: JSON.stringify(body),
     })).catch(() => {});
     return chain;
@@ -41,6 +46,8 @@
       /* 상자의 빈 곳은 터치가 아래 앱으로 통과하고, 버튼·링크·입력칸만 눌린다 */
       .box a,.box button,.box input,.box textarea,.box label{pointer-events:auto} input[type=file]{max-width:100%;color:#ccc}
       #clip{white-space:pre-wrap;max-height:30vh;overflow:auto;flex-basis:100%;font-size:13px;color:#bbb}
+      #kicked{position:fixed;inset:0;pointer-events:auto;background:rgba(10,12,18,.88);color:#eee;display:flex;flex-direction:column;
+        align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center;font:16px/1.5 -apple-system,system-ui,sans-serif}
       #list{max-height:35vh;overflow:auto;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
     </style><div id="list"></div>`;
     const list = root.getElementById('list');
@@ -66,6 +73,16 @@
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
     return {
       ensure,
+      // 다른 폰이 이 탭을 가져갔을 때: 화면을 덮어 누르지 못하게 하고, 원하면 여기서 다시 연다.
+      kicked() {
+        ensure();
+        if (root.getElementById('kicked')) return;
+        const el = document.createElement('div');
+        el.id = 'kicked';
+        el.innerHTML = '<div>다른 기기에서 접속해서 이 화면은 멈췄어요.</div><button>여기서 다시 열기</button>';
+        el.querySelector('button').onclick = () => location.reload();
+        root.append(el);
+      },
       owns: (t) => t === host,
       file(op) {
         const el = box(`<b>파일을 골라 주세요</b><input type="file" ${op.multiple ? 'multiple' : ''} accept="${esc(op.accept || '')}">`, 'file');
@@ -78,7 +95,7 @@
           el.querySelector('b').textContent = '올리는 중…';
           for (let i = 0; i < files.length; i++) {
             const q = new URLSearchParams({ id: op.id, i, name: files[i].name });
-            await fetch('/__parlor/upload?' + q, { method: 'POST', body: files[i] });
+            await fetch('/__parlor/upload?' + q, { method: 'POST', headers: H(), body: files[i] });
           }
           await post('upload-done', { id: op.id, n: files.length });
           el.remove();
@@ -91,7 +108,7 @@
         const el = box(`<b>붙여넣을 내용</b><button class="read">폰 클립보드에서</button><textarea rows="2" style="flex-basis:100%;font:inherit"></textarea><button class="send">보내기</button>`, 'clipread');
         const ta = el.querySelector('textarea');
         const answer = (text) => {
-          fetch('/__parlor/clip', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: op.id, f, text }) }).catch(() => {});
+          fetch('/__parlor/clip', { method: 'POST', headers: H({ 'content-type': 'application/json' }), body: JSON.stringify({ id: op.id, f, text }) }).catch(() => {});
           el.remove();
         };
         el.querySelector('.read').onclick = () => navigator.clipboard?.readText().then(answer, () => { ta.placeholder = '여기에 붙여넣어 주세요'; ta.focus(); });
@@ -605,7 +622,7 @@
       if (op.type === 'confirm') accept = confirm(op.message);
       else if (op.type === 'prompt') { const v = prompt(op.message, op.value); accept = v !== null; text = v ?? ''; }
       else alert(op.message);
-      fetch('/__parlor/dialog', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accept, text }) }).catch(() => {});
+      fetch('/__parlor/dialog', { method: 'POST', headers: H({ 'content-type': 'application/json' }), body: JSON.stringify({ accept, text }) }).catch(() => {});
     });
   }
 
@@ -631,11 +648,18 @@
   addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(sendViewport, 150); });
   sendViewport();
 
-  const es = new EventSource('/__parlor/stream');
-  es.onmessage = (m) => {
-    let msg;
-    try { msg = JSON.parse(m.data); } catch { return; }
-    if (msg && Array.isArray(msg.ops)) onMessage(msg);
+  // 끊기면 같은 sid로 다시 붙고, 붙을 때마다 서버가 전체 화면을 다시 보낸다.
+  // 그 사이 다른 폰이 탭을 가져갔으면 서버가 bye를 보내고, 그때는 다시 붙지 않는다.
+  const connect = () => {
+    const es = new EventSource('/__parlor/stream' + (sid ? '?sid=' + encodeURIComponent(sid) : ''));
+    es.addEventListener('hello', (m) => { try { sid = JSON.parse(m.data).sid; gotSid(); } catch {} });
+    es.addEventListener('bye', () => { es.close(); UI.kicked(); });
+    es.onmessage = (m) => {
+      let msg;
+      try { msg = JSON.parse(m.data); } catch { return; }
+      if (msg && Array.isArray(msg.ops)) onMessage(msg);
+    };
+    es.onerror = () => { if (es.readyState === 2) return; es.close(); setTimeout(connect, 1000); };
   };
-  // EventSource가 알아서 다시 붙고, 붙을 때마다 서버가 전체 화면을 다시 보낸다.
+  connect();
 })();

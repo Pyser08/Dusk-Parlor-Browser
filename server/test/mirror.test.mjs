@@ -292,7 +292,7 @@ test('플러그인 창에 가려진 아래 화면 요소는 클릭 요청이 와
   // iPad 크롬에서 플러그인 안을 누른 것이 최상위 클릭으로 와서, 가려진 리수 버튼이 눌리던 문제
   const i = await mirror.evaluate(`__parlor.idOf(document.querySelector('#b'))`);
   const r = await fetch(`http://127.0.0.1:${mirror.port}/__parlor/event`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ f: 'top', type: 'click', i }),
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-parlor-sid': mirror.sid }, body: JSON.stringify({ f: 'top', type: 'click', i }),
   });
   assert.equal(r.status, 204);
   await new Promise((res) => setTimeout(res, 300));
@@ -428,6 +428,44 @@ test('클립보드 읽기: 서버 앱의 readText()에 폰에서 붙여넣은 �
   await waitFor(`!!${ui('textarea')}`);
   await evalOn(`(() => { const t = ${ui('textarea')}; t.value = '붙임-1'; ${ui('button.send')}.click(); })()`);
   await waitFor(`document.querySelector('#pasted').textContent === '붙임-1'`);
+});
+
+test('다른 폰이 접속하면 이전 폰은 멈추고, "여기서 다시 열기"로 되찾음', async () => {
+  // 두 번째 폰(같은 Chrome의 새 탭)
+  const tab2 = await openPage(phoneCdp);
+  const { targetId } = tab2;
+  const ev2 = async (expr) => (await tab2.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.value;
+  const wait2 = async (expr, ms = 8000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { if (await ev2(expr)) return; await new Promise((r) => setTimeout(r, 50)); }
+    throw new Error('시간 초과(폰2): ' + expr);
+  };
+  const kicked = `!!document.querySelector('#__parlor-ui')?.shadowRoot?.querySelector('#kicked')`;
+  try {
+    await tab2.send('Page.navigate', { url: `http://127.0.0.1:${mirror.port}/__parlor/` });
+    await wait2(`!!document.querySelector('#b')`);
+    // 이전 폰은 멈춤 안내가 뜨고, 자동 재연결로 다시 빼앗지 않음
+    await waitFor(kicked);
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal(await ev2(kicked), false);
+    // 이전 폰의 입력은 서버가 받지 않음
+    const before = await mirror.evaluate(`document.querySelector('#b').textContent`);
+    const st = await evalOn(`fetch('/__parlor/event', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ t: 'click', id: 1 }) }).then((r) => r.status)`);
+    assert.equal(st, 409);
+    // 새 폰은 정상 동작
+    const n = Number(before.split(':')[1]);
+    const p = await ev2(`(() => { const r = document.querySelector('#b').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) await tab2.send('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'left', clickCount: 1 });
+    await wait2(`document.querySelector('#b').textContent === 'count:${n + 1}'`);
+    // 이전 폰에서 "여기서 다시 열기" → 되찾고, 새 폰이 멈춤
+    await evalOn(`document.querySelector('#__parlor-ui').shadowRoot.querySelector('#kicked button').click()`);
+    await waitFor(`!!document.querySelector('#b') && !(${kicked})`);
+    await wait2(kicked);
+    await tap('#b');
+    await waitFor(`document.querySelector('#b').textContent === 'count:${n + 2}'`);
+  } finally {
+    await phoneCdp.send('Target.closeTarget', { targetId }).catch(() => {});
+  }
 });
 
 test('토큰을 설정하면 토큰 없이 접근할 수 없음', async () => {

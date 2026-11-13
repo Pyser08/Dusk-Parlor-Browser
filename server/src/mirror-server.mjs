@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { CDP, openPage, session } from './cdp.mjs';
 import { launchChrome } from './chrome.mjs';
@@ -28,6 +29,8 @@ export async function startMirror(o) {
   const cdp = await CDP.connect(chrome.wsUrl);
   const page = await openPage(cdp);
   const clients = new Set();
+  let current = null; // 지금 탭을 쓰는 폰 { sid, res }
+  const bye = (c) => { clients.delete(c.res); c.res.end('event: bye\ndata: {}\n\n'); };
 
   // 서버 → 폰 메시지: { f: 프레임 키, ops: [...] }. 최상위 프레임 키는 'top'.
   const dbg = process.env.PARLOR_DEBUG ? (...a) => console.error('[dbg]', ...a) : () => {};
@@ -409,11 +412,21 @@ export async function startMirror(o) {
         res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' }).end(CLIENT_JS);
       } else if (p === '/__parlor/stream') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
-        res.write(': hi\n\n');
+        // 탭 하나를 한 번에 한 폰만 쓴다. 새로 연 폰(sid 없음)이 이전 폰을 끊고, 끊긴 폰이 자동 재연결(sid 있음)로
+        // 다시 빼앗지는 않는다. 끊긴 폰은 '여기서 다시 열기'로 새로 열어야 되찾는다.
+        const old = url.searchParams.get('sid');
+        if (old && current && current.sid !== old) { res.end('event: bye\ndata: {}\n\n'); return; }
+        if (current && current.sid !== old) bye(current);
+        const me = { sid: old || randomBytes(9).toString('base64url'), res };
+        current = me;
+        res.write(`event: hello\ndata: ${JSON.stringify({ sid: me.sid })}\n\n`);
         clients.add(res);
         const ping = setInterval(() => res.write(': ping\n\n'), 20000);
-        req.on('close', () => { clients.delete(res); clearInterval(ping); });
+        req.on('close', () => { clients.delete(res); clearInterval(ping); if (current === me) current = null; });
         enqueue(snapAll);
+      } else if (req.method === 'POST' && p.startsWith('/__parlor/') && (!current || req.headers['x-parlor-sid'] !== current.sid)) {
+        // 끊긴 폰(또는 아직 연결 전)의 입력은 받지 않는다
+        res.writeHead(409).end();
       } else if (p === '/__parlor/event' && req.method === 'POST') {
         const ev = await readJson(req);
         await enqueue(() => handleEvent(ev));
@@ -497,6 +510,7 @@ export async function startMirror(o) {
   return {
     port: server.address().port,
     page,
+    get sid() { return current?.sid ?? ''; }, // 지금 탭을 쓰는 폰(시험용)
     evaluate: (expr) => evaluate(expr),
     async close() {
       for (const res of clients) res.end();
