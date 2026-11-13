@@ -5,6 +5,9 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { randomBytes } from 'node:crypto';
+import net from 'node:net';
+import tls from 'node:tls';
+import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CDP, openPage, session } from './cdp.mjs';
 import { launchChrome } from './chrome.mjs';
@@ -13,6 +16,7 @@ const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const AGENT = readFileSync(here('./agent.js'), 'utf8');
 const CLIENT_HTML = readFileSync(here('../client/index.html'));
 const CLIENT_JS = readFileSync(here('../client/mirror.js'));
+const LOGIN_HTML = readFileSync(here('../client/login.html'));
 
 const KEYS = {
   Enter: 13, Escape: 27, Tab: 9, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
@@ -21,7 +25,7 @@ const HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'content-e
 
 /**
  * 서버 Chrome에서 target(리수 주소)을 열고, 폰에는 DOM 변화만 보내는 미러 서버.
- * @param {{target:string, port?:number, host?:string, token?:string, chromeBin?:string, userDataDir?:string}} o
+ * @param {{target:string, port?:number, host?:string, chromeBin?:string, userDataDir?:string}} o
  */
 export async function startMirror(o) {
   const target = new URL(o.target);
@@ -369,16 +373,6 @@ export async function startMirror(o) {
     return v;
   }
 
-  const authed = (req, url, res) => {
-    if (!o.token) return true;
-    if (url.searchParams.get('token') === o.token) {
-      res.setHeader('Set-Cookie', `parlor_token=${encodeURIComponent(o.token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`);
-      return true;
-    }
-    const m = (req.headers.cookie || '').match(/(?:^|;\s*)parlor_token=([^;]+)/);
-    return !!m && decodeURIComponent(m[1]) === o.token;
-  };
-
   const readJson = (req) => new Promise((res, rej) => {
     let s = '';
     req.on('data', (d) => { s += d; if (s.length > 4e6) req.destroy(); });
@@ -386,32 +380,102 @@ export async function startMirror(o) {
     req.on('error', rej);
   });
 
-  async function proxy(req, res, url) {
-    if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405).end(); return; }
-    const dest = new URL(url.pathname + url.search, target);
-    // 리스바드 등은 HttpOnly 세션 쿠키로 파일을 지키므로 서버 Chrome의 쿠키를 그대로 붙인다.
-    const { cookies } = await page.send('Network.getCookies', { urls: [dest.href] });
-    const reqHeaders = cookies.length ? { cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; ') } : {};
-    const r = await fetch(dest, { method: req.method, redirect: 'manual', headers: reqHeaders });
+  // ── 미러 로그인: 리수 비밀번호를 리수 서버(/api/login)에 물어 확인하고, 맞으면 이 기기를 기억한다 ──
+  // 서버 Chrome은 리수에 로그인된 채 남으므로, 미러에 들어오는 사람은 따로 확인해야 한다.
+  const sessionFile = o.sessionFile ?? (o.userDataDir ? path.join(o.userDataDir, 'parlor-sessions.json') : null);
+  const sessions = new Set();
+  try { for (const t of JSON.parse(readFileSync(sessionFile, 'utf8'))) sessions.add(t); } catch {}
+  const saveSessions = () => { if (sessionFile) try { writeFileSync(sessionFile, JSON.stringify([...sessions])); } catch {} };
+  const sessionOf = (req) => (req.headers.cookie || '').match(/(?:^|;\s*)parlor_session=([A-Za-z0-9_-]+)/)?.[1];
+  const loggedIn = (req) => sessions.has(sessionOf(req));
+  let lastFail = 0;
+  async function checkPassword(password) {
+    // 반환: 'ok' | 'wrong' | 'error'. 리수에 비밀번호가 없으면(Password not set) 확인 없이 통과.
+    const r = await fetch(new URL('/api/login', target), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) }).catch(() => null);
+    if (!r) return 'error';
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.status === 'success') return 'ok';
+    if (/not set/i.test(j.error || '')) return 'ok';
+    if (r.status === 400 || r.status === 401 || r.status === 403) return 'wrong';
+    return 'error';
+  }
+
+  // ── /__parlor/ 밖의 요청은 리수로 그대로 넘긴다(PC에서 리수를 바로 쓰는 길) ──
+  // 미러에 로그인한 기기에만 서버 Chrome의 쿠키(리스바드 HttpOnly 세션 등)를 붙인다. 미러 화면의 그림·CSS가 이 길로 온다.
+  const HOP_REQ = new Set(['connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'host', 'proxy-connection']);
+  async function proxy(req, res) {
     const headers = {};
-    r.headers.forEach((v, k) => { if (!HOP.has(k)) headers[k] = v; });
-    res.writeHead(r.status, headers);
-    if (r.body && req.method === 'GET') Readable.fromWeb(r.body).pipe(res);
-    else res.end();
+    for (const [k, v] of Object.entries(req.headers)) if (!HOP_REQ.has(k)) headers[k] = v;
+    headers.host = target.host;
+    if (loggedIn(req)) {
+      const { cookies } = await page.send('Network.getCookies', { urls: [new URL(req.url, target).href] });
+      const own = String(headers.cookie || '').split(/;\s*/).filter((c) => c && !c.startsWith('parlor_session='));
+      headers.cookie = [...own, ...cookies.map((c) => `${c.name}=${c.value}`)].join('; ');
+    }
+    if (!headers.cookie) delete headers.cookie;
+    const mod = target.protocol === 'https:' ? await import('node:https') : http;
+    await new Promise((done) => {
+      const up = mod.request({ host: target.hostname, port: target.port || (target.protocol === 'https:' ? 443 : 80), method: req.method, path: req.url, headers }, (r) => {
+        const out = {};
+        for (const [k, v] of Object.entries(r.headers)) if (k !== 'connection' && k !== 'keep-alive' && k !== 'transfer-encoding') out[k] = v;
+        res.writeHead(r.statusCode, out);
+        r.pipe(res);
+        r.on('end', done);
+        r.on('error', done);
+      });
+      up.on('error', (e) => { if (!res.headersSent) res.writeHead(502).end(String(e.message)); else res.end(); done(); });
+      req.pipe(up);
+    });
+  }
+  // 웹소켓 등 Upgrade 요청은 TCP를 그대로 이어 준다
+  function tunnel(req, sock, head) {
+    if (req.url.startsWith('/__parlor')) { sock.destroy(); return; }
+    const port = Number(target.port) || (target.protocol === 'https:' ? 443 : 80);
+    const up = target.protocol === 'https:' ? tls.connect(port, target.hostname, { servername: target.hostname }) : net.connect(port, target.hostname);
+    up.once(target.protocol === 'https:' ? 'secureConnect' : 'connect', () => {
+      const lines = [`${req.method} ${req.url} HTTP/1.1`];
+      for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        const k = req.rawHeaders[i];
+        lines.push(`${k}: ${k.toLowerCase() === 'host' ? target.host : req.rawHeaders[i + 1]}`);
+      }
+      up.write(lines.join('\r\n') + '\r\n\r\n');
+      if (head?.length) up.write(head);
+      up.pipe(sock); sock.pipe(up);
+    });
+    const end = () => { up.destroy(); sock.destroy(); };
+    up.on('error', end); sock.on('error', end);
   }
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     try {
-      if (!authed(req, url, res)) { res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' }).end('token 필요'); return; }
       const p = url.pathname;
-      if (p === '/' ) { res.writeHead(302, { Location: '/__parlor/' }).end(); return; }
+      if (!p.startsWith('/__parlor')) { await proxy(req, res); return; }
+      if (p === '/__parlor/login' && req.method === 'POST') {
+        const d = await readJson(req).catch(() => ({}));
+        // 마구 대입 막기: 틀린 뒤 1초 동안은 다시 확인하지 않음
+        if (Date.now() - lastFail < 1000) { res.writeHead(429).end(); return; }
+        const v = await checkPassword(String(d.password ?? ''));
+        if (v !== 'ok') { if (v === 'wrong') lastFail = Date.now(); res.writeHead(v === 'wrong' ? 401 : 502).end(); return; }
+        const t = randomBytes(24).toString('base64url');
+        sessions.add(t);
+        saveSessions();
+        res.writeHead(204, { 'Set-Cookie': `parlor_session=${t}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000` }).end();
+        return;
+      }
+      if (!loggedIn(req)) {
+        if (req.method === 'GET' && (p === '/__parlor/' || p === '/__parlor')) res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end(LOGIN_HTML);
+        else res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' }).end('로그인이 필요해요');
+        return;
+      }
       if (p === '/__parlor/' || p === '/__parlor') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end(CLIENT_HTML);
       } else if (p === '/__parlor/mirror.js') {
         res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' }).end(CLIENT_JS);
       } else if (p === '/__parlor/stream') {
-        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+        // nginx 등 앞단 서버 뒤에 있어도 바로바로 가도록: 버퍼링 끄기(X-Accel-Buffering)·압축 안 함(no-transform).
+        // 앞단 서버가 없으면 그냥 무시되는 헤더라 늘 붙인다.
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
         // 탭 하나를 한 번에 한 폰만 쓴다. 새로 연 폰(sid 없음)이 이전 폰을 끊고, 끊긴 폰이 자동 재연결(sid 있음)로
         // 다시 빼앗지는 않는다. 끊긴 폰은 '여기서 다시 열기'로 새로 열어야 되찾는다.
         const old = url.searchParams.get('sid');
@@ -497,7 +561,7 @@ export async function startMirror(o) {
         if (!b) { res.writeHead(404).end(); return; }
         res.writeHead(200, { 'content-type': b.type, 'cache-control': 'private, max-age=31536000, immutable' }).end(b.body);
       } else {
-        await proxy(req, res, url);
+        res.writeHead(404).end();
       }
     } catch (e) {
       if (!res.headersSent) res.writeHead(502).end(String(e.message));
@@ -505,6 +569,7 @@ export async function startMirror(o) {
     }
   });
 
+  server.on('upgrade', tunnel);
   await new Promise((r) => server.listen(o.port ?? 7300, o.host ?? '0.0.0.0', r));
 
   return {

@@ -10,7 +10,6 @@ const m = await startMirror({
   target,
   port: Number(process.env.PARLOR_PORT || 7300),
   host: process.env.PARLOR_HOST || '0.0.0.0',
-  token: process.env.PARLOR_TOKEN || '',
   chromeBin: process.env.CHROME_BIN,
   userDataDir: process.env.PARLOR_PROFILE || new URL('../.parlor-profile', import.meta.url).pathname,
 });

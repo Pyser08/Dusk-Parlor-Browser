@@ -2,6 +2,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { writeFileSync } from 'node:fs';
@@ -151,6 +152,11 @@ const tap = async (sel) => {
   }
 };
 
+const loginCookie = async () => {
+  const r = await fetch(`http://127.0.0.1:${mirror.port}/__parlor/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'pw' }) });
+  return r.headers.get('set-cookie').split(';')[0];
+};
+
 // 폰 화면의 플러그인 iframe 안 요소
 const inPlug = (sel) => `document.querySelector('#plug')?.contentDocument?.querySelector(${JSON.stringify(sel)})`;
 const tapInPlug = async (sel) => {
@@ -162,6 +168,22 @@ const tapInPlug = async (sel) => {
 
 before(async () => {
   fixture = http.createServer((req, res) => {
+    if (req.url === '/api/login' && req.method === 'POST') {
+      let b = '';
+      req.on('data', (c) => { b += c; });
+      req.on('end', () => {
+        const ok = JSON.parse(b || '{}').password === 'pw';
+        res.writeHead(ok ? 200 : 400, { 'content-type': 'application/json' }).end(JSON.stringify(ok ? { status: 'success' } : { error: 'Password incorrect' }));
+      });
+      return;
+    }
+    if (req.url === '/echo') {
+      // 리수로 그대로 넘어왔는지 확인용: 방법·본문·쿠키를 돌려줌
+      let b = '';
+      req.on('data', (c) => { b += c; });
+      req.on('end', () => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ m: req.method, b, cookie: req.headers.cookie || '' })));
+      return;
+    }
     if (req.url === '/secure.png') {
       // 리스바드처럼 HttpOnly 세션 쿠키가 있어야만 주는 파일
       if (/(?:^|;\s*)sess=ok(?:;|$)/.test(req.headers.cookie || '')) res.writeHead(200, { 'content-type': 'image/png' }).end(Buffer.from(PNG, 'base64'));
@@ -175,6 +197,11 @@ before(async () => {
     } else if (req.url === '/a.css') res.writeHead(200, { 'content-type': 'text/css' }).end('#b{width:200px}');
     else res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'sess=ok; Path=/; HttpOnly; SameSite=Strict' }).end(FIXTURE);
   });
+  // 웹소켓 대신: Upgrade를 받으면 101 뒤 받은 바이트를 그대로 돌려줌
+  fixture.on('upgrade', (req, sock) => {
+    sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
+    sock.pipe(sock);
+  });
   await new Promise((r) => fixture.listen(0, '127.0.0.1', r));
   mirror = await startMirror({ target: `http://127.0.0.1:${fixture.address().port}/`, port: 0, host: '127.0.0.1' });
   phone = await launchChrome();
@@ -186,6 +213,9 @@ before(async () => {
   // 폰에서 뜬 confirm()은 '확인'으로 답한다
   tab.on((m) => { if (m.method === 'Page.javascriptDialogOpening') tab.send('Page.handleJavaScriptDialog', { accept: true }); });
   await tab.send('Page.navigate', { url: `http://127.0.0.1:${mirror.port}/__parlor/` });
+  // 처음엔 리수 비밀번호를 묻는다
+  await waitFor(`!!document.querySelector('#pw')`);
+  await evalOn(`document.querySelector('#pw').value = 'pw'; document.querySelector('#f').requestSubmit()`);
 });
 
 after(async () => {
@@ -292,7 +322,7 @@ test('플러그인 창에 가려진 아래 화면 요소는 클릭 요청이 와
   // iPad 크롬에서 플러그인 안을 누른 것이 최상위 클릭으로 와서, 가려진 리수 버튼이 눌리던 문제
   const i = await mirror.evaluate(`__parlor.idOf(document.querySelector('#b'))`);
   const r = await fetch(`http://127.0.0.1:${mirror.port}/__parlor/event`, {
-    method: 'POST', headers: { 'content-type': 'application/json', 'x-parlor-sid': mirror.sid }, body: JSON.stringify({ f: 'top', type: 'click', i }),
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-parlor-sid': mirror.sid, cookie: await loginCookie() }, body: JSON.stringify({ f: 'top', type: 'click', i }),
   });
   assert.equal(r.status, 204);
   await new Promise((res) => setTimeout(res, 300));
@@ -430,6 +460,44 @@ test('클립보드 읽기: 서버 앱의 readText()에 폰에서 붙여넣은 �
   await waitFor(`document.querySelector('#pasted').textContent === '붙임-1'`);
 });
 
+
+test('미러는 리수 비밀번호를 물어보고, 맞으면 기억함', async () => {
+  const base = `http://127.0.0.1:${mirror.port}`;
+  // 로그인 전: 미러 화면 대신 비밀번호 화면, 미러 기능은 401
+  assert.match(await (await fetch(base + '/__parlor/')).text(), /id="pw"/);
+  assert.equal((await fetch(base + '/__parlor/stream')).status, 401);
+  // 틀린 비밀번호
+  const bad = await fetch(base + '/__parlor/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'nope' }) });
+  assert.equal(bad.status, 401);
+  assert.equal(bad.headers.get('set-cookie'), null);
+  await new Promise((r) => setTimeout(r, 1100));
+  // 맞는 비밀번호 → 쿠키로 기억
+  const cookie = await loginCookie();
+  assert.match(await (await fetch(base + '/__parlor/', { headers: { cookie } })).text(), /mirror\.js/);
+});
+
+test('/__parlor 밖의 주소는 리수로 그대로 넘어감(POST 본문 포함), 로그인 안 한 사람에겐 서버 쿠키를 안 붙임', async () => {
+  const base = `http://127.0.0.1:${mirror.port}`;
+  const r = await (await fetch(base + '/echo', { method: 'POST', body: 'hello', headers: { cookie: 'mine=1' } })).json();
+  assert.deepEqual(r, { m: 'POST', b: 'hello', cookie: 'mine=1' });
+  // 리스바드 HttpOnly 세션 쿠키로 지킨 파일: 그냥 들어오면 막히고, 미러 로그인한 기기는 서버 Chrome 쿠키로 받음
+  assert.equal((await fetch(base + '/secure.png')).status, 401);
+  assert.equal((await fetch(base + '/secure.png', { headers: { cookie: await loginCookie() } })).status, 200);
+});
+
+test('웹소켓(Upgrade) 요청도 리수로 이어 줌', async () => {
+  const sock = net.connect(mirror.port, '127.0.0.1');
+  await new Promise((r) => sock.once('connect', r));
+  sock.write('GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
+  let got = '';
+  sock.on('data', (d) => { got += d; if (got.includes('\r\n\r\n') && !got.includes('ping')) sock.write('ping'); });
+  const end = Date.now() + 5000;
+  while (!got.endsWith('ping') && Date.now() < end) await new Promise((r) => setTimeout(r, 30));
+  sock.destroy();
+  assert.match(got, /^HTTP\/1\.1 101/);
+  assert.ok(got.endsWith('ping'));
+});
+
 test('다른 폰이 접속하면 이전 폰은 멈추고, "여기서 다시 열기"로 되찾음', async () => {
   // 두 번째 폰(같은 Chrome의 새 탭)
   const tab2 = await openPage(phoneCdp);
@@ -468,18 +536,15 @@ test('다른 폰이 접속하면 이전 폰은 멈추고, "여기서 다시 열�
   }
 });
 
-test('토큰을 설정하면 토큰 없이 접근할 수 없음', async () => {
-  const m2 = await startMirror({ target: `http://127.0.0.1:${fixture.address().port}/`, port: 0, host: '127.0.0.1', token: 'secret' });
+test('nginx 같은 앞단 서버가 화면 스트림을 모아 두지 않도록 알림', async () => {
+  // nginx는 X-Accel-Buffering: no를 보면 그 응답만 버퍼링을 끈다(설정 파일을 안 고쳐도 됨).
+  // no-transform은 앞단 서버가 압축하느라 스트림을 붙잡지 않게 한다.
+  const ac = new AbortController();
+  const r = await fetch(`http://127.0.0.1:${mirror.port}/__parlor/stream`, { signal: ac.signal, headers: { 'x-forwarded-for': '1.2.3.4', cookie: await loginCookie() } });
   try {
-    const base = `http://127.0.0.1:${m2.port}`;
-    const denied = await fetch(base + '/__parlor/');
-    assert.equal(denied.status, 401);
-    assert.match(denied.headers.get('content-type') || '', /charset=utf-8/); // 안내 문구 한글이 깨지지 않게
-    const ok = await fetch(base + '/__parlor/?token=secret');
-    assert.equal(ok.status, 200);
-    const cookie = ok.headers.get('set-cookie').split(';')[0];
-    assert.equal((await fetch(base + '/a.css', { headers: { cookie } })).status, 200);
+    assert.equal(r.headers.get('x-accel-buffering'), 'no');
+    assert.match(r.headers.get('cache-control') || '', /no-transform/);
   } finally {
-    await m2.close();
+    ac.abort();
   }
 });

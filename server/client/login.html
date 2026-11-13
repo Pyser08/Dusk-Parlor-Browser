@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dusk Parlor</title>
+<style>
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#111;color:#ddd;font:16px/1.5 -apple-system,system-ui,sans-serif}
+  form{width:min(320px,calc(100% - 32px));display:flex;flex-direction:column;gap:12px}
+  h1{font-size:18px;margin:0}
+  p{margin:0;color:#999;font-size:14px}
+  input,button{font:inherit;padding:12px;border-radius:10px;border:1px solid #333;background:#1c1c1c;color:#eee}
+  button{background:#3b82f6;border:0;color:#fff}
+  #err{color:#f4867a;min-height:1.5em}
+</style>
+</head>
+<body>
+<form id="f">
+  <h1>Dusk Parlor</h1>
+  <p>리수 비밀번호를 넣어 주세요. 이 기기에서는 처음 한 번만 물어봐요.</p>
+  <input id="pw" type="password" autocomplete="current-password" autofocus>
+  <button>들어가기</button>
+  <div id="err"></div>
+</form>
+<script>
+f.onsubmit = async (e) => {
+  e.preventDefault();
+  err.textContent = '';
+  const r = await fetch('/__parlor/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: pw.value }) }).catch(() => null);
+  if (r && r.ok) location.replace('/__parlor/');
+  else err.textContent = r && r.status === 401 ? '비밀번호가 맞지 않아요.' : '리수 서버에 확인하지 못했어요. 잠시 뒤 다시 해 주세요.';
+};
+</script>
+</body>
+</html>
