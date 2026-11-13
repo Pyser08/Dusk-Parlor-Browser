@@ -1,5 +1,8 @@
 import http from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, createWriteStream, createReadStream, statSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { CDP, openPage, session } from './cdp.mjs';
@@ -144,6 +147,10 @@ export async function startMirror(o) {
         dropFrame(m.params.frameId);
       } else if (m.method === 'Page.javascriptDialogOpening') {
         onDialog(sess, m.params);
+      } else if (m.method === 'Page.fileChooserOpened') {
+        onFileChooser(sess, m.params);
+      } else if (m.method === 'Input.dragIntercepted') {
+        drag.data = m.params.data;
       } else if (m.method === 'Target.attachedToTarget') {
         const info = m.params.targetInfo;
         dbg('연결', info.type, info.url, info.targetId.slice(0, 8));
@@ -164,12 +171,53 @@ export async function startMirror(o) {
     await sess.send('Runtime.enable');
     await sess.send('Runtime.addBinding', { name: '__parlorEmit' });
     await sess.send('Page.addScriptToEvaluateOnNewDocument', { source: AGENT, runImmediately: true });
+    // 파일 창은 서버 화면에 뜨면 아무도 못 고르므로 가로채서 폰에서 고르게 한다.
+    await sess.send('Page.setInterceptFileChooserDialog', { enabled: true }).catch(() => {});
     // 플러그인 iframe은 별도 프로세스(OOPIF)라 자동 연결로 받는다. 에이전트를 심기 전까지 멈춰 둔다.
     await sess.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     if (parentSess) await sess.send('Runtime.runIfWaitingForDebugger');
   }
 
+  // ── 파일 가져오기·내보내기 ──
+  const work = mkdtempSync(path.join(os.tmpdir(), 'parlor-files-'));
+  const downloadDir = path.join(work, 'down');
+  const uploadDir = path.join(work, 'up');
+  mkdirSync(downloadDir);
+  mkdirSync(uploadDir);
+  const choosers = new Map(); // id → { sess, backendNodeId, multiple, accept }
+  let nextChooser = 1;
+  async function onFileChooser(sess, p) {
+    let accept = '';
+    try {
+      const { object } = await sess.send('DOM.resolveNode', { backendNodeId: p.backendNodeId });
+      const r = await sess.send('Runtime.callFunctionOn', { objectId: object.objectId, functionDeclaration: 'function () { return this.accept || ""; }', returnByValue: true });
+      accept = r.result.value || '';
+    } catch {}
+    const id = String(nextChooser++);
+    choosers.set(id, { sess, backendNodeId: p.backendNodeId, multiple: p.mode === 'selectMultiple', accept });
+    dbg('파일 창', id, p.mode, accept);
+    broadcast('top', JSON.stringify([{ op: 'file', id, multiple: p.mode === 'selectMultiple', accept }]));
+  }
+  const downloads = new Map(); // guid → { name, done }
+  cdp.on((m) => {
+    if (m.sessionId) return;
+    if (m.method === 'Browser.downloadWillBegin') {
+      downloads.set(m.params.guid, { name: m.params.suggestedFilename || 'download', done: false });
+    } else if (m.method === 'Browser.downloadProgress' && m.params.state === 'completed') {
+      const d = downloads.get(m.params.guid);
+      if (!d) return;
+      d.done = true;
+      dbg('다운로드', d.name);
+      broadcast('top', JSON.stringify([{ op: 'download', id: m.params.guid, name: d.name }]));
+    }
+  });
+  await cdp.send('Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath: downloadDir, eventsEnabled: true });
+
+  // ── 드래그(네이티브 드래그 앤 드롭은 가로채서 드래그 이벤트로 이어 간다) ──
+  const drag = { data: null, x: 0, y: 0 };
+
   await setupSession(page, null);
+  await page.send('Input.setInterceptDrags', { enabled: true }).catch(() => {});
   frames.set('top', frames.get('top') || { key: 'top', frameId: topFrameId, sess: page, owner: 0 });
   await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await page.send('Page.navigate', { url: target.href });
@@ -206,7 +254,10 @@ export async function startMirror(o) {
     const i = Number(ev.i) | 0;
     const key = typeof ev.f === 'string' && frames.has(ev.f) ? ev.f : 'top';
     if (ev.type === 'click') {
-      const local = await evaluate(`__parlor.point(${i})`, key);
+      const fx = Number.isFinite(+ev.fx) ? +ev.fx : 'undefined';
+      const fy = Number.isFinite(+ev.fy) ? +ev.fy : 'undefined';
+      const local = await evaluate(`__parlor.point(${i}, ${fx}, ${fy})`, key);
+      if (local?.covered) return;
       const p = local && await toTop(key, local);
       dbg('클릭', key, i, JSON.stringify(local), JSON.stringify(p));
       if (!p) return evaluate(`__parlor.click(${i})`, key);
@@ -229,6 +280,31 @@ export async function startMirror(o) {
       // rawKeyDown: 문자 입력 없이 키 처리기만 실행(값은 따로 동기화됨)
       await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
       await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+    } else if (ev.type === 'drag') {
+      const p = await toTop(key, { x: +ev.x || 0, y: +ev.y || 0 });
+      if (!p) return;
+      const send = (type, extra = {}) => page.send('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'left', ...extra });
+      const dragEvent = (type) => page.send('Input.dispatchDragEvent', { type, x: p.x, y: p.y, data: drag.data });
+      if (ev.phase === 'start') {
+        drag.data = null;
+        await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+        await send('mousePressed', { buttons: 1, clickCount: 1 });
+      } else if (ev.phase === 'move') {
+        if (drag.data) await dragEvent('dragOver');
+        else {
+          await send('mouseMoved', { buttons: 1 });
+          // 움직임으로 네이티브 드래그가 시작되면 dragIntercepted가 온다 → 바로 dragEnter
+          await new Promise((r) => setTimeout(r, 20));
+          if (drag.data) await dragEvent('dragEnter');
+        }
+      } else if (ev.phase === 'end') {
+        if (drag.data) {
+          await dragEvent('dragOver');
+          await dragEvent('drop');
+          drag.data = null;
+        }
+        await send('mouseReleased', { buttons: 0, clickCount: 1 });
+      }
     } else if (ev.type === 'input' || ev.type === 'change' || ev.type === 'scroll') {
       await evaluate(`__parlor.apply(${JSON.stringify({ type: ev.type, i, v: String(ev.v ?? ''), k: !!ev.k, x: +ev.x || 0, y: +ev.y || 0 })})`, key);
     }
@@ -284,7 +360,7 @@ export async function startMirror(o) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     try {
-      if (!authed(req, url, res)) { res.writeHead(401).end('token 필요'); return; }
+      if (!authed(req, url, res)) { res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' }).end('token 필요'); return; }
       const p = url.pathname;
       if (p === '/' ) { res.writeHead(302, { Location: '/__parlor/' }).end(); return; }
       if (p === '/__parlor/' || p === '/__parlor') {
@@ -302,6 +378,42 @@ export async function startMirror(o) {
         const ev = await readJson(req);
         await enqueue(() => handleEvent(ev));
         res.writeHead(204).end();
+      } else if (p === '/__parlor/upload' && req.method === 'POST') {
+        // 폰에서 고른 파일 하나를 받아 서버 임시 폴더에 원래 이름 그대로 저장
+        const id = String(url.searchParams.get('id'));
+        const n = Number(url.searchParams.get('i')) | 0;
+        const name = path.basename(String(url.searchParams.get('name') || 'file')).replace(/[\x00-\x1f]/g, '') || 'file';
+        if (!choosers.has(id)) { res.writeHead(404).end(); return; }
+        const dir = path.join(uploadDir, id, String(n));
+        mkdirSync(dir, { recursive: true });
+        await pipeline(req, createWriteStream(path.join(dir, name)));
+        res.writeHead(204).end();
+      } else if (p === '/__parlor/upload-done' && req.method === 'POST') {
+        const d = await readJson(req);
+        const c = choosers.get(String(d.id));
+        choosers.delete(String(d.id));
+        if (c && !d.cancel) {
+          const files = [];
+          for (let n = 0; n < (Number(d.n) | 0); n++) {
+            const dir = path.join(uploadDir, String(d.id), String(n));
+            for (const f of readdirSync(dir)) files.push(path.join(dir, f));
+          }
+          await enqueue(() => c.sess.send('DOM.setFileInputFiles', { files: c.multiple ? files : files.slice(0, 1), backendNodeId: c.backendNodeId }));
+        }
+        res.writeHead(204).end();
+      } else if (p.startsWith('/__parlor/download/')) {
+        const guid = decodeURIComponent(p.slice('/__parlor/download/'.length));
+        const d = downloads.get(guid);
+        const file = path.join(downloadDir, path.basename(guid));
+        if (!d || !d.done) { res.writeHead(404).end(); return; }
+        const ascii = d.name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+        res.writeHead(200, {
+          'content-type': 'application/octet-stream',
+          'content-length': statSync(file).size,
+          'content-disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(d.name)}`,
+          'cache-control': 'no-store',
+        });
+        createReadStream(file).pipe(res);
       } else if (p === '/__parlor/dialog' && req.method === 'POST') {
         // 대화상자가 열려 있는 동안 입력 줄이 막혀 있으므로 줄을 거치지 않고 바로 답한다.
         const d = await readJson(req);

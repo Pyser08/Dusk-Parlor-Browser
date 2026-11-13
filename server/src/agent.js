@@ -98,6 +98,33 @@
     emit(ops);
   });
 
+  // 복사: 서버 Chrome의 클립보드가 아니라 폰 클립보드로 보낸다.
+  const emitClip = (t) => { if (t) emit([{ op: 'clip', text: String(t) }]); };
+  if (window.Clipboard) {
+    const cw = Clipboard.prototype.writeText;
+    const cwr = Clipboard.prototype.write;
+    Clipboard.prototype.writeText = function (t) { emitClip(t); return cw.call(this, t).catch(() => {}); };
+    Clipboard.prototype.write = function (items) {
+      for (const it of items || []) {
+        if (it.types?.includes('text/plain')) it.getType('text/plain').then((b) => b.text()).then(emitClip, () => {});
+      }
+      return cwr.call(this, items).catch(() => {});
+    };
+  }
+  const exec = Document.prototype.execCommand;
+  Document.prototype.execCommand = function (cmd, ...rest) {
+    if (String(cmd).toLowerCase() === 'copy') {
+      const a = this.activeElement;
+      emitClip(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')
+        ? a.value.slice(a.selectionStart ?? 0, a.selectionEnd ?? 0) : String(this.getSelection?.() || ''));
+    }
+    return exec.call(this, cmd, ...rest);
+  };
+  // Chrome 전용 파일 API는 서버 화면에서만 열리므로 막아서, 리수가 input[type=file]·다운로드 링크를 쓰게 한다.
+  for (const k of ['showOpenFilePicker', 'showSaveFilePicker', 'showDirectoryPicker']) {
+    try { delete Window.prototype[k]; delete window[k]; } catch {}
+  }
+
   // 입력값: 이벤트와 프로그램에서 바꾼 값(전송 후 비우기 등)을 모두 잡는다.
   const pendingVals = new Map();
   let valQueued = false;
@@ -159,6 +186,18 @@
 
   mo.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
 
+  // 폰의 터치는 아이콘 안쪽 SVG 조각(폭 0인 선 등)을 눌린 요소로 잡는다. 그런 조각은 크기가 없어
+  // 누를 좌표를 못 구하므로 아이콘 전체(<svg>)를 기준으로 삼는다.
+  const tapTarget = (n) => {
+    if (n && n.nodeType !== 1) n = n.parentElement;
+    if (n instanceof SVGElement && n.ownerSVGElement) {
+      let svg = n.ownerSVGElement;
+      while (svg.ownerSVGElement) svg = svg.ownerSVGElement;
+      n = svg;
+    }
+    return n;
+  };
+
   window.__parlor = {
     snap,
     node,
@@ -172,20 +211,35 @@
       const cs = getComputedStyle(n);
       return { x: r.left + n.clientLeft + parseFloat(cs.paddingLeft), y: r.top + n.clientTop + parseFloat(cs.paddingTop) };
     },
-    // 클릭할 화면 좌표. 다른 요소에 가려져 있으면 null(→ el.click()으로 대체).
-    point(i) {
-      const n = node(i);
+    // 클릭할 화면 좌표. 다른 요소에 가려져 있으면 null(→ el.click()으로 대체), iframe에 가려졌으면 { covered }.
+    point(i, fx, fy) {
+      const orig = node(i);
+      const n = tapTarget(orig);
       if (!n || !n.isConnected || !n.getBoundingClientRect) return null;
       n.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
       const r = n.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) return null;
+      // 폰에서 누른 자리(요소 안 비율)가 있으면 그 자리를 먼저 누른다. 큰 배경처럼 가운데가 가려진 요소 때문.
+      if (n === orig && Number.isFinite(fx) && Number.isFinite(fy)) {
+        const px = r.left + fx * r.width;
+        const py = r.top + fy * r.height;
+        const h = document.elementFromPoint(px, py);
+        if (h && (h === n || n.contains(h))) return { x: px, y: py };
+      }
       const x = r.left + r.width / 2;
       const y = r.top + r.height / 2;
       const hit = document.elementFromPoint(x, y);
+      // 플러그인 창(iframe)에 가려져 있으면 누르지 않는다. 폰에서 창 안을 누른 것이 잘못 와도
+      // 아래 화면 버튼이 눌리지 않게(iPad 크롬에서 창이 겹겹이 열리던 문제).
+      if (hit && hit.tagName === 'IFRAME' && hit !== n && !n.contains(hit)) return { covered: true };
       if (!hit || !(hit === n || n.contains(hit))) return null;
       return { x, y };
     },
-    click(i) { node(i)?.click?.(); },
+    click(i) {
+      let n = tapTarget(node(i));
+      while (n && typeof n.click !== 'function') n = n.parentElement; // SVG 요소에는 click()이 없다
+      n?.click();
+    },
     focus(i) { const n = node(i); n?.focus?.(); return !!n; },
     // 플러그인 iframe(별도 프로세스) 안의 키 입력. 헤드리스 Chrome에서 실제 키 이벤트를 OOPIF로
     // 보내면 그 뒤 마우스 입력이 iframe에 닿지 않는 문제가 있어(DESIGN-frames.md) 이벤트를 직접 만든다.
