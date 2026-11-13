@@ -111,9 +111,12 @@ function installLinuxLibs(log = console.log) {
   if (!apt) return false;
   const root = process.getuid?.() === 0;
   const run = (pkgs) => {
-    const cmd = root ? "apt-get" : "sudo";
-    const a = root ? ["install", "-y", ...pkgs] : ["apt-get", "install", "-y", ...pkgs];
-    try { execFileSync(cmd, a, { stdio: "inherit", env: { ...process.env, DEBIAN_FRONTEND: "noninteractive" } }); return true; } catch { return false; }
+    // sudo는 환경 변수를 지우므로 env로 넘긴다. NEEDRESTART_MODE=a: 우분투의 '재시작할 서비스' 창을 띄우지 않고 알아서 처리
+    // (curl | bash로 실행하면 그 창에서 방향키가 안 먹는다)
+    const quiet = ["DEBIAN_FRONTEND=noninteractive", "NEEDRESTART_MODE=a", "NEEDRESTART_SUSPEND=1"];
+    const cmd = root ? "env" : "sudo";
+    const a = [...(root ? [] : ["env"]), ...quiet, "apt-get", "install", "-y", "-q", ...pkgs];
+    try { execFileSync(cmd, a, { stdio: ["ignore", "inherit", "inherit"] }); return true; } catch { return false; }
   };
   log("Chrome에 필요한 라이브러리를 설치해요(관리자 암호를 물을 수 있어요)…");
   if (run(LIBS.map((n) => (T64.has(n) ? n + "t64" : n)))) return true;
