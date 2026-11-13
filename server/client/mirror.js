@@ -84,6 +84,17 @@
       download(op) {
         autoClose(box(`<b>파일 받기</b><a href="/__parlor/download/${encodeURIComponent(op.id)}" download="${esc(op.name)}">${esc(op.name)}</a>`, 'dl-' + op.id), 60000);
       },
+      clipRead(op, f) {
+        const el = box(`<b>붙여넣을 내용</b><button class="read">폰 클립보드에서</button><textarea rows="2" style="flex-basis:100%;font:inherit"></textarea><button class="send">보내기</button>`, 'clipread');
+        const ta = el.querySelector('textarea');
+        const answer = (text) => {
+          fetch('/__parlor/clip', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: op.id, f, text }) }).catch(() => {});
+          el.remove();
+        };
+        el.querySelector('.read').onclick = () => navigator.clipboard?.readText().then(answer, () => { ta.placeholder = '여기에 붙여넣어 주세요'; ta.focus(); });
+        el.querySelector('.send').onclick = () => answer(ta.value);
+        el.querySelector('.x').onclick = () => answer(null);
+      },
       notify(op) {
         const el = box(`<b>${esc(op.title)}</b><div id="clip">${esc(op.body || '')}</div>`, null);
         setTimeout(() => el.remove(), 8000);
@@ -286,6 +297,7 @@
       if (op.op === 'download') return UI.download(op);
       if (op.op === 'clip') return UI.clip(op.text);
       if (op.op === 'notify') return UI.notify(op);
+      if (op.op === 'clipread') return UI.clipRead(op, key);
       if (op.op === 'open') return UI.open(op.url);
       if (op.op === 'media' || op.op === 'speak' || op.op === 'speak-cancel') return Sound.handle(op, nodes.get(op.i));
       if (op.op === 'canvas') return drawCanvas(nodes.get(op.i), op.d);
@@ -414,6 +426,33 @@
         }
         post('event', ev);
       };
+      // 호버: 마우스가 있는 기기에서 버튼을 누르지 않고 움직이면 서버 마우스도 옮긴다(터치는 탭할 때 옮겨짐).
+      let hoverAt = 0;
+      let hoverTail = null;
+      let hoverLast = null;
+      const sendHover = () => {
+        hoverTail = null;
+        if (!hoverLast) return;
+        hoverAt = performance.now();
+        const { t, x, y } = hoverLast;
+        hoverLast = null;
+        let n = t;
+        while (n && !idOf.has(n)) n = n.parentNode;
+        if (!n) return;
+        const ev = { f: key, type: 'hover', i: idOf.get(n) };
+        const r = n.getBoundingClientRect?.();
+        if (r && r.width > 0 && r.height > 0) {
+          ev.fx = Math.min(1, Math.max(0, (x - r.left) / r.width));
+          ev.fy = Math.min(1, Math.max(0, (y - r.top) / r.height));
+        }
+        post('event', ev);
+      };
+      document.addEventListener('pointermove', (e) => {
+        if (e.pointerType !== 'mouse' || e.buttons || drag.on || UI.owns(e.target)) return;
+        hoverLast = { t: e.target, x: e.clientX, y: e.clientY };
+        if (performance.now() - hoverAt >= 80) sendHover();
+        else if (!hoverTail) hoverTail = setTimeout(sendHover, 80);
+      }, true);
       let lastLong = -Infinity;
       document.addEventListener('contextmenu', (e) => {
         if (UI.owns(e.target)) return;

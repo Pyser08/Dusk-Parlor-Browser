@@ -46,6 +46,8 @@ const FIXTURE = `<!doctype html><html class="dark"><head>
 <div id="ctx" style="width:120px;height:30px;background:#cfc">ctx</div><span id="ctxout">ctx:0</span>
 <button id="win">win</button><button id="noti">noti</button><button id="snd">snd</button>
 <canvas id="cv" width="40" height="20" style="border:1px solid #000"></canvas><button id="draw">draw</button>
+<div id="hov" style="width:80px;height:24px;background:#ccf">hov</div><span id="hovout">hov:0</span>
+<button id="paste">paste</button><span id="pasted">-</span>
 </div>
 <button id="b">count:0</button>
 <ul id="list"></ul>
@@ -95,6 +97,9 @@ for (const li of dl.children) {
   li.addEventListener('dragover', (e) => e.preventDefault());
   li.addEventListener('drop', (e) => { e.preventDefault(); if (dragged && dragged !== li) { li.after(dragged); order(); } });
 }
+let hv = 0;
+hov.addEventListener('mouseenter', () => { hovout.textContent = 'hov:' + (++hv); });
+paste.onclick = () => navigator.clipboard.readText().then((t) => { pasted.textContent = t; }, (e) => { pasted.textContent = 'err:' + e.message; });
 ce.addEventListener('input', () => { ceout.textContent = ce.textContent; });
 let cx = 0;
 ctx.addEventListener('contextmenu', (e) => { e.preventDefault(); ctxout.textContent = 'ctx:' + (++cx); });
@@ -400,6 +405,21 @@ test('소리와 TTS는 폰에서 재생하도록 전달됨', async () => {
 test('캔버스에 그린 그림이 폰에 보임', async () => {
   await tap('#draw');
   await waitFor(`(() => { const c = document.querySelector('#cv'); const d = c.getContext('2d').getImageData(20, 10, 1, 1).data; return d[0] > 200 && d[1] < 60 && d[3] > 200; })()`);
+});
+
+test('호버: 폰에서 마우스를 올리면 서버에서도 올라감', async () => {
+  const p = await evalOn(`(() => { const r = document.querySelector('#hov').getBoundingClientRect(); return { x: r.left + 20, y: r.top + 10 }; })()`);
+  await tab.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x - 200, y: p.y + 300 });
+  await new Promise((r) => setTimeout(r, 100));
+  await tab.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+  await waitFor(`document.querySelector('#hovout').textContent === 'hov:1'`);
+});
+
+test('클립보드 읽기: 서버 앱의 readText()에 폰에서 붙여넣은 내용이 감', async () => {
+  await tap('#paste');
+  await waitFor(`!!${ui('textarea')}`);
+  await evalOn(`(() => { const t = ${ui('textarea')}; t.value = '붙임-1'; ${ui('button.send')}.click(); })()`);
+  await waitFor(`document.querySelector('#pasted').textContent === '붙임-1'`);
 });
 
 test('토큰을 설정하면 토큰 없이 접근할 수 없음', async () => {

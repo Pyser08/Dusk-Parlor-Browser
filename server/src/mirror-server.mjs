@@ -300,6 +300,13 @@ export async function startMirror(o) {
       // rawKeyDown: 문자 입력 없이 키 처리기만 실행(값은 따로 동기화됨)
       await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
       await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+    } else if (ev.type === 'hover') {
+      const fx = Number.isFinite(+ev.fx) ? +ev.fx : 'undefined';
+      const fy = Number.isFinite(+ev.fy) ? +ev.fy : 'undefined';
+      const local = await evaluate(`__parlor.point(${i}, ${fx}, ${fy}, true)`, key);
+      if (!local || local.covered) return;
+      const p = await toTop(key, local);
+      if (p) await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
     } else if (ev.type === 'edit') {
       await evaluate(`__parlor.edit(${i}, ${JSON.stringify(String(ev.v ?? ''))})`, key);
     } else if (ev.type === 'context') {
@@ -410,6 +417,11 @@ export async function startMirror(o) {
       } else if (p === '/__parlor/event' && req.method === 'POST') {
         const ev = await readJson(req);
         await enqueue(() => handleEvent(ev));
+        res.writeHead(204).end();
+      } else if (p === '/__parlor/clip' && req.method === 'POST') {
+        const d = await readJson(req);
+        const key = typeof d.f === 'string' && frames.has(d.f) ? d.f : 'top';
+        await enqueue(() => evaluate(`__parlor.clipAnswer(${Number(d.id) | 0}, ${d.text == null ? 'null' : JSON.stringify(String(d.text))})`, key));
         res.writeHead(204).end();
       } else if (p === '/__parlor/upload' && req.method === 'POST') {
         // 폰에서 고른 파일 하나를 받아 서버 임시 폴더에 원래 이름 그대로 저장

@@ -111,6 +111,21 @@
       return cwr.call(this, items).catch(() => {});
     };
   }
+  // 클립보드 읽기: 서버 클립보드가 아니라 폰에서 붙여넣은 내용을 돌려준다.
+  const clipWait = new Map();
+  let clipReq = 0;
+  const askClip = () => new Promise((ok, no) => {
+    const id = ++clipReq;
+    clipWait.set(id, { ok, no });
+    emit([{ op: 'clipread', id }]);
+    setTimeout(() => { if (clipWait.delete(id)) no(new DOMException('시간 초과', 'NotAllowedError')); }, 120000);
+  });
+  if (window.Clipboard) {
+    Clipboard.prototype.readText = function () { return askClip(); };
+    Clipboard.prototype.read = function () {
+      return askClip().then((t) => [new ClipboardItem({ 'text/plain': new Blob([t], { type: 'text/plain' }) })]);
+    };
+  }
   const exec = Document.prototype.execCommand;
   Document.prototype.execCommand = function (cmd, ...rest) {
     if (String(cmd).toLowerCase() === 'copy') {
@@ -281,11 +296,11 @@
       return { x: r.left + n.clientLeft + parseFloat(cs.paddingLeft), y: r.top + n.clientTop + parseFloat(cs.paddingTop) };
     },
     // 클릭할 화면 좌표. 다른 요소에 가려져 있으면 null(→ el.click()으로 대체), iframe에 가려졌으면 { covered }.
-    point(i, fx, fy) {
+    point(i, fx, fy, noScroll) {
       const orig = node(i);
       const n = tapTarget(orig);
       if (!n || !n.isConnected || !n.getBoundingClientRect) return null;
-      n.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      if (!noScroll) n.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
       const r = n.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) return null;
       // 폰에서 누른 자리(요소 안 비율)가 있으면 그 자리를 먼저 누른다. 큰 배경처럼 가운데가 가려진 요소 때문.
@@ -311,6 +326,13 @@
       n.focus?.();
       n.textContent = v;
       n.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    },
+    clipAnswer(id, text) {
+      const w = clipWait.get(id);
+      if (!w) return;
+      clipWait.delete(id);
+      if (text == null) w.no(new DOMException('사용자가 취소함', 'NotAllowedError'));
+      else w.ok(String(text));
     },
     // 우클릭 자리를 못 구했을 때의 대체
     context(i) {
