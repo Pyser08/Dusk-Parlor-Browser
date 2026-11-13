@@ -343,6 +343,8 @@ test('복사: 서버에서 복사한 글이 폰으로 옴', async () => {
 });
 
 test('드래그로 순서 바꾸기: 폰에서 끌면 서버에서 실제 드래그 앤 드롭', async () => {
+  // 앞 시험이 띄운 안내 상자(파일 받기 등)를 닫는다
+  await evalOn(`document.querySelector('#__parlor-ui')?.shadowRoot?.getElementById('list')?.replaceChildren()`);
   const c = async (sel) => evalOn(`(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
   const a = await c('#d1');
   const b = await c('#d2');
@@ -394,6 +396,12 @@ test('새 창(window.open)은 폰에서 열 수 있는 링크로 옴', async () 
 test('알림(Notification)이 폰 안내 화면에 뜸', async () => {
   await tap('#noti');
   await waitFor(`(document.querySelector('#__parlor-ui')?.shadowRoot?.textContent || '').includes('응답 도착')`);
+});
+
+test('안내 상자는 화면 아래(채팅 입력줄 자리)를 가리지 않음', async () => {
+  // 알림 시험에서 띄운 상자가 남아 있는 상태
+  await waitFor(`(document.querySelector('#__parlor-ui')?.shadowRoot?.getElementById('list')?.children.length || 0) > 0`);
+  assert.notEqual(await evalOn(`document.elementFromPoint(innerWidth / 2, innerHeight - 20)?.id`), '__parlor-ui');
 });
 
 test('소리와 TTS는 폰에서 재생하도록 전달됨', async () => {

@@ -30,15 +30,18 @@
   const UI = (() => {
     const host = document.createElement('div');
     host.id = '__parlor-ui';
-    host.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;pointer-events:none';
+    // 채팅 앱은 입력줄이 아래에 있으므로 위쪽에 띄운다.
+    host.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2147483647;pointer-events:none';
     const root = host.attachShadow({ mode: 'open' });
     root.innerHTML = `<style>
-      .box{pointer-events:auto;margin:10px;padding:12px 14px;border-radius:12px;background:#1f2430;color:#eee;
+      .box{pointer-events:none;margin:10px auto;max-width:520px;padding:12px 14px;border-radius:12px;background:#1f2430;color:#eee;
         font:15px/1.4 -apple-system,system-ui,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,.4);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
       .box b{flex:1 1 auto} a,button,label{font:inherit;color:#fff;background:#3b82f6;border:0;border-radius:8px;padding:8px 12px;text-decoration:none;cursor:pointer}
-      button.x{background:#444} input[type=file]{max-width:100%;color:#ccc}
+      button.x{background:#444}
+      /* 상자의 빈 곳은 터치가 아래 앱으로 통과하고, 버튼·링크·입력칸만 눌린다 */
+      .box a,.box button,.box input,.box textarea,.box label{pointer-events:auto} input[type=file]{max-width:100%;color:#ccc}
       #clip{white-space:pre-wrap;max-height:30vh;overflow:auto;flex-basis:100%;font-size:13px;color:#bbb}
-      #list{max-height:35vh;overflow:auto;display:flex;flex-direction:column;justify-content:flex-end}
+      #list{max-height:35vh;overflow:auto;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
     </style><div id="list"></div>`;
     const list = root.getElementById('list');
     const ensure = () => { if (!host.isConnected) document.documentElement.appendChild(host); };
