@@ -42,6 +42,7 @@ RisuAI 호환 **혼합형 iOS/iPadOS 앱**. 화면 뼈대는 네이티브(Swift)
 - 설치 자동화(2026-11-13): Dusk Cellar처럼 리스 폴더에 install.sh/.command/.bat을 넣으면 `리스/Dusk-Parlor/`에 설치(`parlor-setup.cjs`). Chrome은 설치된 것 → 없으면 Chrome for Testing 헤드리스 판 받기(`chrome-get.cjs`). pm2가 있으면 리스(Cellar) 항목은 포트만 7778로, 미러는 별도 pm2 `dusk-parlor`(사용자 요청). pm2가 없으면 start_parlor 실행 파일 + 함께 켜는 실행기(`parlor-start.cjs`).
   - 확인: 맥(가짜 리스+가짜 Cellar, pm2 없이, 시스템 Chrome), Debian ARM 컨테이너(pm2, apt chromium: 설치·재설치·pm2 resurrect). 미확인: 윈도우 전체, Chrome for Testing 받은 판으로 실행(이 맥에서 받은 실행 파일 실행이 권한 검사에 막힘), 실제 RisuBard, GitHub에서 받는 설치(푸시 전).
   - 푸시: mirror 브랜치, 태그 mirror-v0.1.0. 이 맥의 git 토큰엔 workflow 권한이 없어 릴리즈 워크플로는 못 올림(릴리즈는 웹에서 수동).
+- Dusk Atelier 설치 돕기(2026-11-13): 리수엔 바깥에서 플러그인 넣는 기능이 없음(설정→플러그인→+ 파일 선택뿐) → 사용자 결정: 처음 접속 때 안내 + .js 파일 창에 '최신판 넣기' 버튼(GitHub releases/latest). RisuBard는 db.plugins(켜짐 포함)가 저장 데이터라 미러 설치 = PC에도 적용. 실제 RisuBard에서 안내→+→버튼→업데이트 확인→안내 사라짐 확인. 시험 39건.
 - 다음(다음 대화): iOS 셸(`ios/`)이 미러 주소를 열도록 연결(Xcode·iPad 시뮬레이터 준비됨).
 - 미확인: 플러그인 창 안 입력·confirm(가짜 시험만), 응답 스트리밍 표시.
 

@@ -20,7 +20,7 @@
 - Chrome: 설치된 Chrome(윈도우는 Edge도)을 쓰고, 없으면 Google의 Chrome for Testing 헤드리스 판을 `Dusk-Parlor/chrome/`에 받아요(관리자 권한 불필요).
 - **pm2가 있으면:** 리스(또는 Dusk Cellar 실행기)를 켜던 pm2 항목은 그대로 두고 포트만 7778로 옮긴 뒤, 미러를 따로 pm2 `dusk-parlor`로 7777에 등록해요. 미러는 리스가 응답할 때까지 기다렸다 켜져서 재부팅 때 순서가 섞여도 괜찮아요.
 - **pm2가 없으면(휴대용 등):** 리스 폴더에 `start_parlor.command`(맥)·`start_parlor.bat`(윈도우)·`start_parlor.sh`(리눅스)를 만들어요. 이걸로 켜면 리스(Cellar가 있으면 Cellar 실행기)가 7778, 미러가 7777로 함께 켜지고 함께 꺼져요. 미러만 죽으면 미러만 다시 켜요. Chrome이나 Node 22가 없으면 미러 없이 리스를 원래 포트로 켜요.
-- 옵션: `--no-pm2`, `--port 7777`, `--risu-port 7778`. 설정은 `Dusk-Parlor/parlor.json`.
+- 옵션: `--no-pm2`, `--port 7777`, `--risu-port 7778`, `--no-dusk`(Dusk Atelier 안내·버튼 끄기). 설정은 `Dusk-Parlor/parlor.json`.
 - 결과: PC는 `http://<서버>:7777/`(리스 그대로), 폰은 `http://<서버>:7777/__parlor/`.
 - Dusk Cellar 실행기는 리스에 `PORT`를 그대로 넘겨서 함께 돌아요.
 
@@ -53,6 +53,7 @@ PARLOR_TARGET=http://127.0.0.1:6001 npm start
 - `alert`/`confirm`/`prompt`는 폰에 띄우고, 폰의 답을 서버로 돌려줘요. 폰이 연결돼 있지 않으면 바로 닫아요.
 - 서버에서만 일어나는 일은 폰 아래 안내 화면으로 이어 받아요.
   - 파일 가져오기: 서버의 파일 창을 가로채(`Page.setInterceptFileChooserDialog`) 폰에 "파일을 골라 주세요" → 고른 파일을 서버 입력칸에 넣음.
+  - Dusk Atelier: 처음 접속한 폰에 설치 안내를 한 번 띄워요("다시 안 보기" 또는 설치하면 다시 안 뜸, 기록은 프로필 폴더 `parlor-state.json`). 플러그인 가져오기처럼 `.js` 파일 창이 뜨면 "Dusk Atelier 최신판 넣기" 버튼이 있어서, 누르면 서버가 GitHub 최신 릴리즈를 받아 넣어요. RisuBard는 플러그인 목록이 리수 저장 데이터에 있어서 미러에서 설치하면 PC에서도 그대로예요. 끄려면 `PARLOR_DUSK=0`(설치 옵션 `--no-dusk`).
   - 내보내기: 서버 Chrome 다운로드를 가로채 폰에 "파일 받기" 링크.
   - 복사: 클립보드 API·`execCommand('copy')`를 가로채 폰 클립보드로(막히면 "폰에 복사" 버튼).
   - 클립보드 읽기: 앱의 `clipboard.readText()`·`read()`는 폰에 "붙여넣을 내용"을 띄워 폰 클립보드나 직접 입력한 글을 돌려줌.
@@ -68,12 +69,12 @@ PARLOR_TARGET=http://127.0.0.1:6001 npm start
 - `blob:` 이미지는 `/__parlor/blob`으로 서버 페이지에서 꺼내 전달. 그 밖의 정적 파일(CSS·폰트·이미지)은 위의 넘기기 길로 받아요.
 
 ## 시험
-`npm test` — 가짜 리수 페이지를 Chrome 두 개로 확인해요(36건).
+`npm test` — 가짜 리수 페이지를 Chrome 두 개로 확인해요(39건).
 - 기본: 미러 로그인, 리수로 넘기기(POST·웹소켓), 첫 화면, 스크립트 차단, CSS 프록시, 쿠키 필요한 파일, blob 이미지, 클릭 왕복, 한글 입력+Enter
 - 프레임: 같은 출처 iframe, 플러그인 iframe 표시·클릭·입력·`confirm`·재접속 복원·닫기, 가려진 요소 안 누르기
 - 터치: 아이콘(SVG) 버튼, 누른 자리 그대로 누르기, click만 오는 입력칸 포커스
 - 파일·복사·드래그: 파일 가져오기, 내보내기, 복사, 드래그 앤 드롭
-- 그 밖: 서식 편집기, 우클릭·길게 누르기, 새 창, 알림, 안내 상자 위치, 소리·TTS, 캔버스, 호버, 클립보드 읽기, 다른 폰 접속 시 넘겨주기, nginx 뒤 스트림 버퍼링
+- 그 밖: 서식 편집기, 우클릭·길게 누르기, 새 창, 알림, 안내 상자 위치, 소리·TTS, 캔버스, 호버, 클립보드 읽기, 다른 폰 접속 시 넘겨주기, nginx 뒤 스트림 버퍼링, Dusk 설치 안내·버튼
 
 맥에서는 `CHROME_BIN="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" npm test`.
 

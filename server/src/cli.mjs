@@ -19,6 +19,8 @@ const m = await startMirror({
   port: Number(process.env.PARLOR_PORT || 7300),
   host: process.env.PARLOR_HOST || '0.0.0.0',
   chromeBin: process.env.CHROME_BIN,
+  // Dusk Atelier 안내·설치 버튼(PARLOR_DUSK=0이면 끔)
+  dusk: process.env.PARLOR_DUSK === '0' ? null : { url: process.env.PARLOR_DUSK_URL || 'https://github.com/Pyser08/Dusk-Atelier/releases/latest/download/dusk_atelier.js' },
   userDataDir: process.env.PARLOR_PROFILE || new URL('../.parlor-profile', import.meta.url).pathname,
 });
 console.log(`[parlor] ${target} 미러 중 → http://<서버>:${m.port}/__parlor/`);

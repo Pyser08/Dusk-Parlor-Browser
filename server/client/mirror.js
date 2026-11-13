@@ -74,6 +74,11 @@
     return {
       ensure,
       // 다른 폰이 이 탭을 가져갔을 때: 화면을 덮어 누르지 못하게 하고, 원하면 여기서 다시 연다.
+      // 처음 접속 때 한 번: Dusk Atelier 설치 안내
+      duskHint() {
+        const el = box('<b>Dusk Atelier를 설치하려면: 리수 설정 → 플러그인 → +를 누르고 \'Dusk Atelier 최신판 넣기\'를 누르세요.</b><button class="never">다시 안 보기</button>', 'duskhint');
+        el.querySelector('.never').onclick = () => { el.remove(); post('dusk-hint-done', {}); };
+      },
       kicked() {
         ensure();
         if (root.getElementById('kicked')) return;
@@ -85,7 +90,16 @@
       },
       owns: (t) => t === host,
       file(op) {
-        const el = box(`<b>파일을 골라 주세요</b><input type="file" ${op.multiple ? 'multiple' : ''} accept="${esc(op.accept || '')}">`, 'file');
+        const el = box(`<b>파일을 골라 주세요</b><input type="file" ${op.multiple ? 'multiple' : ''} accept="${esc(op.accept || '')}">${op.dusk ? '<button id="dusk">Dusk Atelier 최신판 넣기</button>' : ''}`, 'file');
+        if (op.dusk) {
+          el.querySelector('#dusk').onclick = async () => {
+            sent = true;
+            el.querySelector('b').textContent = 'Dusk Atelier 받는 중…';
+            const r = await fetch('/__parlor/dusk', { method: 'POST', headers: H({ 'content-type': 'application/json' }), body: JSON.stringify({ id: op.id }) }).catch(() => null);
+            if (r && r.ok) { el.remove(); root.getElementById('duskhint')?.remove(); }
+            else el.querySelector('b').textContent = '받지 못했어요. 잠시 뒤 다시 해 주세요.';
+          };
+        }
         const inp = el.querySelector('input');
         let sent = false;
         el.querySelector('.x').onclick = () => { el.remove(); if (!sent) post('upload-done', { id: op.id, cancel: true }); };
@@ -314,6 +328,7 @@
       if (op.op === 'frame') { links.set(op.key, { parent: doc, owner: op.owner }); return; }
       if (op.op === 'dialog') return showDialog(op);
       if (op.op === 'file') return UI.file(op);
+      if (op.op === 'duskhint') return UI.duskHint();
       if (op.op === 'download') return UI.download(op);
       if (op.op === 'clip') return UI.clip(op.text);
       if (op.op === 'notify') return UI.notify(op);

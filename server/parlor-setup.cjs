@@ -5,7 +5,7 @@
 //   3. parlor.json 만들기(있으면 그대로)
 //   4. pm2가 있으면: 리스(또는 Dusk Cellar 실행기) pm2 항목은 그대로 두고 포트만 안쪽으로 옮긴 뒤, 미러를 별도 pm2 'dusk-parlor'로 등록
 //      pm2가 없으면: 리스 폴더에 start_parlor(.command/.bat/.sh) 만들기
-// 옵션: --no-pm2  pm2를 건드리지 않음 · --port 7777 · --risu-port 7778
+// 옵션: --no-pm2  pm2를 건드리지 않음 · --port 7777 · --risu-port 7778 · --no-dusk  Dusk Atelier 안내·설치 버튼 끄기(--dusk로 다시 켬)
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
@@ -39,6 +39,8 @@ async function main() {
   conf.port = Number(opt("--port", conf.port || 7777));
   conf.risuPort = Number(opt("--risu-port", conf.risuPort || 7778));
   conf.chromeBin = chrome;
+  if (args.includes("--no-dusk")) conf.dusk = false;
+  else if (args.includes("--dusk")) conf.dusk = true;
   fs.writeFileSync(confFile, JSON.stringify(conf, null, 2) + "\n");
 
   const pm2 = args.includes("--no-pm2") ? null : findPm2();
@@ -73,7 +75,7 @@ function registerPm2(pm2, conf, chrome, risuRoot) {
   const app = {
     name: "dusk-parlor", script: path.join(__dirname, "src", "cli.mjs"), cwd: __dirname, interpreter: process.execPath,
     autorestart: true, restart_delay: 3000, max_memory_restart: "3G",
-    env: { PARLOR_TARGET: `http://127.0.0.1:${conf.risuPort}`, PARLOR_PORT: String(conf.port), PARLOR_HOST: "0.0.0.0", CHROME_BIN: chrome, PARLOR_PROFILE: path.join(__dirname, "data", "profile") },
+    env: { PARLOR_TARGET: `http://127.0.0.1:${conf.risuPort}`, PARLOR_PORT: String(conf.port), PARLOR_HOST: "0.0.0.0", CHROME_BIN: chrome, PARLOR_PROFILE: path.join(__dirname, "data", "profile"), PARLOR_DUSK: conf.dusk === false ? "0" : "1" },
   };
   fs.writeFileSync(eco, "// parlor-setup.cjs가 만든 파일. 다시 설치하면 덮어써요.\nmodule.exports = " + JSON.stringify({ apps: [app] }, null, 2) + ";\n");
   if (list.some((p) => p.name === "dusk-parlor")) run(pm2, ["delete", "dusk-parlor"]);

@@ -33,7 +33,7 @@ const FIXTURE = `<!doctype html><html class="dark"><head>
 <script>window.__fixtureRan = 1</script>
 </head><body>
 <div id="io" style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">
-<button id="pick">pick</button><span id="picked">-</span>
+<button id="pick">pick</button><span id="picked">-</span><button id="pickjs">pickjs</button>
 <button id="save">save</button>
 <button id="copy">copy</button>
 <ul id="dl" style="list-style:none;padding:0;margin:0;width:200px">
@@ -79,6 +79,14 @@ pick.onclick = () => {
   const inp = document.createElement('input');
   inp.type = 'file';
   inp.accept = '.txt';
+  inp.onchange = async () => { const f = inp.files[0]; picked.textContent = f.name + ':' + (await f.text()); };
+  inp.click();
+};
+// 리수 플러그인 가져오기처럼 .js 파일 창
+pickjs.onclick = () => {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.js';
   inp.onchange = async () => { const f = inp.files[0]; picked.textContent = f.name + ':' + (await f.text()); };
   inp.click();
 };
@@ -188,6 +196,8 @@ before(async () => {
       // 리스바드처럼 HttpOnly 세션 쿠키가 있어야만 주는 파일
       if (/(?:^|;\s*)sess=ok(?:;|$)/.test(req.headers.cookie || '')) res.writeHead(200, { 'content-type': 'image/png' }).end(Buffer.from(PNG, 'base64'));
       else res.writeHead(401).end();
+    } else if (req.url === '/dusk.js') {
+      res.writeHead(200, { 'content-type': 'text/javascript' }).end('//@name dusk_atelier');
     } else if (req.url === '/beep.wav') {
       res.writeHead(200, { 'content-type': 'audio/wav' }).end(WAV);
     } else if (req.url === '/newpage') {
@@ -203,7 +213,7 @@ before(async () => {
     sock.pipe(sock);
   });
   await new Promise((r) => fixture.listen(0, '127.0.0.1', r));
-  mirror = await startMirror({ target: `http://127.0.0.1:${fixture.address().port}/`, port: 0, host: '127.0.0.1' });
+  mirror = await startMirror({ target: `http://127.0.0.1:${fixture.address().port}/`, port: 0, host: '127.0.0.1', dusk: { url: `http://127.0.0.1:${fixture.address().port}/dusk.js` } });
   phone = await launchChrome();
   phoneCdp = await CDP.connect(phone.wsUrl);
   tab = await openPage(phoneCdp);
@@ -356,6 +366,33 @@ test('파일 가져오기: 서버의 파일 창 대신 폰에서 고른 파일�
   await tab.send('DOM.getDocument');
   await tab.send('DOM.setFileInputFiles', { files: [file], objectId: result.objectId });
   await waitFor(`document.querySelector('#picked').textContent === 'parlor-a.txt:안녕 파일'`);
+});
+
+test('처음 접속하면 Dusk Atelier 설치 안내가 뜨고, "다시 안 보기"를 누르면 다시 안 뜸', async () => {
+  await waitFor(`!!${ui('#duskhint')}`);
+  await evalOn(`${ui('#duskhint .never')}.click()`);
+  await waitFor(`!${ui('#duskhint')}`);
+  await new Promise((r) => setTimeout(r, 300));
+  await tab.send('Page.reload');
+  await waitFor(`!!document.querySelector('#b')`);
+  await new Promise((r) => setTimeout(r, 800));
+  assert.equal(await evalOn(`!!${ui('#duskhint')}`), false);
+});
+
+test('플러그인(.js) 파일 창에서 "Dusk Atelier 최신판 넣기"를 누르면 서버가 받아 넣음', async () => {
+  await tap('#pickjs');
+  await waitFor(`!!${ui('#dusk')}`);
+  await evalOn(`${ui('#dusk')}.click()`);
+  await waitFor(`document.querySelector('#picked').textContent === 'dusk_atelier.js://@name dusk_atelier'`);
+  await waitFor(`!${ui('#dusk')}`);
+  assert.equal(await evalOn(`!!${ui('#duskhint')}`), false); // 설치했으면 안내도 닫힘
+});
+
+test('.js가 아닌 파일 창에는 Dusk 버튼이 없음', async () => {
+  await tap('#pick');
+  await waitFor(`!!${ui('input[type=file]')}`);
+  assert.equal(await evalOn(`!!${ui('#dusk')}`), false);
+  await evalOn(`${ui('#file .x')}.click()`);
 });
 
 test('파일 내보내기: 서버에서 받은 파일을 폰에서 받을 수 있음', async () => {

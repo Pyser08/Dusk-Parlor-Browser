@@ -68,7 +68,7 @@ function startMirror(chrome) {
   if (stopping) return;
   mirror = spawn(process.execPath, [path.join(__dirname, "src", "cli.mjs")], {
     stdio: "inherit",
-    env: { ...process.env, PARLOR_TARGET: `http://127.0.0.1:${RISU_PORT}`, PARLOR_PORT: PORT, PARLOR_HOST: HOST, CHROME_BIN: chrome, PARLOR_PROFILE: path.join(dataDir, "profile") },
+    env: { ...process.env, PARLOR_TARGET: `http://127.0.0.1:${RISU_PORT}`, PARLOR_PORT: PORT, PARLOR_HOST: HOST, CHROME_BIN: chrome, PARLOR_PROFILE: path.join(dataDir, "profile"), PARLOR_DUSK: conf.dusk === false ? "0" : "1" },
   });
   const started = Date.now();
   mirror.on("exit", (code, sig) => {

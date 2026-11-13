@@ -203,7 +203,31 @@ export async function startMirror(o) {
     const id = String(nextChooser++);
     choosers.set(id, { sess, backendNodeId: p.backendNodeId, multiple: p.mode === 'selectMultiple', accept });
     dbg('파일 창', id, p.mode, accept);
-    broadcast('top', JSON.stringify([{ op: 'file', id, multiple: p.mode === 'selectMultiple', accept }]));
+    // 플러그인 가져오기(.js)라면 폰에 'Dusk Atelier 최신판 넣기' 버튼도 준다
+    const dusk = !!o.dusk && /\.js\b|javascript/i.test(accept);
+    broadcast('top', JSON.stringify([{ op: 'file', id, multiple: p.mode === 'selectMultiple', accept, dusk }]));
+  }
+
+  // ── Dusk Atelier 안내·설치 (o.dusk = { url }) ──
+  // 처음 접속한 폰에 안내를 한 번 띄우고, 플러그인 파일 창에서 버튼을 누르면 최신 릴리즈를 받아 넣는다.
+  const stateFile = o.userDataDir ? path.join(o.userDataDir, 'parlor-state.json') : null;
+  let state = {};
+  try { state = JSON.parse(readFileSync(stateFile, 'utf8')); } catch {}
+  const saveState = () => { if (stateFile) try { writeFileSync(stateFile, JSON.stringify(state)); } catch {} };
+  async function putDusk(id) {
+    const c = choosers.get(id);
+    if (!c || !o.dusk) return false;
+    const r = await fetch(o.dusk.url, { redirect: 'follow' });
+    if (!r.ok) throw new Error('Dusk Atelier를 받지 못했어요(' + r.status + ')');
+    const dir = path.join(uploadDir, id, 'dusk');
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'dusk_atelier.js');
+    writeFileSync(file, Buffer.from(await r.arrayBuffer()));
+    choosers.delete(id);
+    await enqueue(() => c.sess.send('DOM.setFileInputFiles', { files: [file], backendNodeId: c.backendNodeId }));
+    state.duskHintDone = true;
+    saveState();
+    return true;
   }
   const downloads = new Map(); // guid → { name, done }
   cdp.on((m) => {
@@ -484,6 +508,7 @@ export async function startMirror(o) {
         const me = { sid: old || randomBytes(9).toString('base64url'), res };
         current = me;
         res.write(`event: hello\ndata: ${JSON.stringify({ sid: me.sid })}\n\n`);
+        if (o.dusk && !state.duskHintDone) res.write(`data: ${JSON.stringify({ f: 'top', ops: [{ op: 'duskhint' }] })}\n\n`);
         clients.add(res);
         const ping = setInterval(() => res.write(': ping\n\n'), 20000);
         req.on('close', () => { clients.delete(res); clearInterval(ping); if (current === me) current = null; });
@@ -509,6 +534,13 @@ export async function startMirror(o) {
         const dir = path.join(uploadDir, id, String(n));
         mkdirSync(dir, { recursive: true });
         await pipeline(req, createWriteStream(path.join(dir, name)));
+        res.writeHead(204).end();
+      } else if (p === '/__parlor/dusk' && req.method === 'POST') {
+        const d = await readJson(req);
+        try { res.writeHead((await putDusk(String(d.id))) ? 204 : 404).end(); } catch (e) { res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' }).end(String(e.message)); }
+      } else if (p === '/__parlor/dusk-hint-done' && req.method === 'POST') {
+        state.duskHintDone = true;
+        saveState();
         res.writeHead(204).end();
       } else if (p === '/__parlor/upload-done' && req.method === 'POST') {
         const d = await readJson(req);
