@@ -10,7 +10,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
-const { findChrome, downloadChrome } = require("./chrome-get.cjs");
+const { findChrome, downloadChrome, checkChrome, installLinuxLibs } = require("./chrome-get.cjs");
 
 const say = (...a) => console.log("[parlor]", ...a);
 const die = (m) => { console.error("[실패]", m); process.exit(1); };
@@ -31,6 +31,11 @@ async function main() {
     try { chrome = await downloadChrome(__dirname, say); } catch (e) { die("Chrome을 받지 못했어요: " + e.message + "\n  Chrome을 설치한 뒤 다시 실행하거나 CHROME_BIN에 경로를 넣어 주세요."); }
   }
   say("Chrome:", chrome);
+  // 실제로 떠 보는지 확인한다. 안 뜨면 리스 포트를 옮기기 전에 멈춘다(리스가 끊기지 않게).
+  let chk = checkChrome(chrome);
+  if (!chk.ok && chk.missingLibs && installLinuxLibs(say)) chk = checkChrome(chrome);
+  if (!chk.ok) die("Chrome이 실행되지 않아요. 리스는 그대로 두었어요.\n  " + chk.err + "\n  리눅스라면 'sudo apt install chromium'(또는 'sudo snap install chromium') 후 다시 설치해 주세요.");
+  say("Chrome 실행 확인");
 
   // 설정
   const confFile = path.join(__dirname, "parlor.json");

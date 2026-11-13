@@ -43,6 +43,7 @@ RisuAI 호환 **혼합형 iOS/iPadOS 앱**. 화면 뼈대는 네이티브(Swift)
   - 확인: 맥(가짜 리스+가짜 Cellar, pm2 없이, 시스템 Chrome), Debian ARM 컨테이너(pm2, apt chromium: 설치·재설치·pm2 resurrect). 미확인: 윈도우 전체, Chrome for Testing 받은 판으로 실행(이 맥에서 받은 실행 파일 실행이 권한 검사에 막힘), 실제 RisuBard, GitHub에서 받는 설치(푸시 전).
   - 푸시: mirror 브랜치, 태그 mirror-v0.1.0. 이 맥의 git 토큰엔 workflow 권한이 없어 릴리즈 워크플로는 못 올림(릴리즈는 웹에서 수동).
 - Dusk Atelier 설치 돕기(2026-11-13): 리수엔 바깥에서 플러그인 넣는 기능이 없음(설정→플러그인→+ 파일 선택뿐) → 사용자 결정: 처음 접속 때 안내 + .js 파일 창에 '최신판 넣기' 버튼(GitHub releases/latest). RisuBard는 db.plugins(켜짐 포함)가 저장 데이터라 미러 설치 = PC에도 적용. 실제 RisuBard에서 안내→+→버튼→업데이트 확인→안내 사라짐 확인. 시험 39건.
+- 사용자 서버(우분투 ARM, pm2 'risubard') 첫 설치: 받은 헤드리스 Chrome이 libatk 등 라이브러리가 없어 못 떠서 7777이 통째로 끊김. 고침: 설치 때 Chrome 실행 확인 + apt 라이브러리 자동 설치(t64 이름), 실패 시 포트 안 옮김. 미러가 Chrome을 못 띄우면 대체 서버(src/fallback.mjs)가 리스로 넘기며 1분마다 재시도. Ubuntu 24.04 ARM 컨테이너에서 확인.
 - 다음(다음 대화): iOS 셸(`ios/`)이 미러 주소를 열도록 연결(Xcode·iPad 시뮬레이터 준비됨).
 - 미확인: 플러그인 창 안 입력·confirm(가짜 시험만), 응답 스트리밍 표시.
 

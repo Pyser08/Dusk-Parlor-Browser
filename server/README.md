@@ -18,6 +18,8 @@
 - 리스 폴더 안 `Dusk-Parlor/`에 설치돼요. 다시 실행하면 최신으로 바뀌어요(`data/`·`parlor.json`은 그대로).
 - Node는 리스의 `bin/node`(휴대용 배포본)를 먼저 쓰고, 없으면 시스템 Node 22 이상을 써요. git은 필요 없어요.
 - Chrome: 설치된 Chrome(윈도우는 Edge도)을 쓰고, 없으면 Google의 Chrome for Testing 헤드리스 판을 `Dusk-Parlor/chrome/`에 받아요(관리자 권한 불필요).
+- 설치할 때 Chrome을 실제로 한 번 띄워 봐요. 리눅스에서 라이브러리가 없어 못 뜨면 apt로 필요한 라이브러리를 설치해요(관리자 암호를 물을 수 있어요, 우분투 24.04 이름도 처리). 그래도 안 뜨면 리스 포트를 옮기지 않고 멈춰요.
+- 미러가 Chrome을 못 띄우면 원래 포트를 쥔 채 리스로 넘기기만 하고(`/__parlor/`는 안내 화면), 1분마다 다시 시도해요. 미러 문제로 리스가 끊기지 않아요.
 - **pm2가 있으면:** 리스(또는 Dusk Cellar 실행기)를 켜던 pm2 항목은 그대로 두고 포트만 7778로 옮긴 뒤, 미러를 따로 pm2 `dusk-parlor`로 7777에 등록해요. 미러는 리스가 응답할 때까지 기다렸다 켜져서 재부팅 때 순서가 섞여도 괜찮아요.
 - **pm2가 없으면(휴대용 등):** 리스 폴더에 `start_parlor.command`(맥)·`start_parlor.bat`(윈도우)·`start_parlor.sh`(리눅스)를 만들어요. 이걸로 켜면 리스(Cellar가 있으면 Cellar 실행기)가 7778, 미러가 7777로 함께 켜지고 함께 꺼져요. 미러만 죽으면 미러만 다시 켜요. Chrome이나 Node 22가 없으면 미러 없이 리스를 원래 포트로 켜요.
 - 옵션: `--no-pm2`, `--port 7777`, `--risu-port 7778`, `--no-dusk`(Dusk Atelier 안내·버튼 끄기). 설정은 `Dusk-Parlor/parlor.json`.

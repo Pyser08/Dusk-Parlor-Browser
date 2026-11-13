@@ -5,7 +5,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 
 const CFT = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
 
@@ -92,4 +92,32 @@ async function downloadChrome(base, log = console.log) {
   return exe;
 }
 
-module.exports = { findChrome, downloadChrome, platformKey };
+// 실제로 한 번 띄워 본다. 리눅스 서버는 Chrome이 쓰는 라이브러리가 없어서 못 뜨는 일이 많다.
+function checkChrome(exe) {
+  const headless = /headless-shell/i.test(path.basename(exe)) ? "--headless" : "--headless=new";
+  const args = [headless, "--disable-gpu", "--dump-dom", "about:blank", ...(process.getuid?.() === 0 ? ["--no-sandbox"] : [])];
+  const r = spawnSync(exe, args, { encoding: "utf8", timeout: 60000 });
+  if (r.status === 0) return { ok: true };
+  const err = String(r.stderr || r.error?.message || "").trim().split("\n").slice(-3).join("\n");
+  return { ok: false, err, missingLibs: /shared libraries|cannot open shared object/i.test(err) };
+}
+
+// Debian·Ubuntu에서 헤드리스 Chrome이 쓰는 라이브러리 설치(우분투 24.04는 이름 끝에 t64가 붙는다)
+const LIBS = ["libatk1.0-0", "libatk-bridge2.0-0", "libcups2", "libasound2", "libxkbcommon0", "libxcomposite1", "libxdamage1", "libxfixes3", "libxrandr2", "libgbm1", "libpango-1.0-0", "libcairo2", "libnss3", "libnspr4", "libdrm2", "libxshmfence1", "fonts-noto-cjk"];
+const T64 = new Set(["libatk1.0-0", "libatk-bridge2.0-0", "libcups2", "libasound2"]);
+function installLinuxLibs(log = console.log) {
+  if (process.platform !== "linux") return false;
+  let apt = false; try { execFileSync("apt-get", ["--version"], { stdio: "ignore" }); apt = true; } catch {}
+  if (!apt) return false;
+  const root = process.getuid?.() === 0;
+  const run = (pkgs) => {
+    const cmd = root ? "apt-get" : "sudo";
+    const a = root ? ["install", "-y", ...pkgs] : ["apt-get", "install", "-y", ...pkgs];
+    try { execFileSync(cmd, a, { stdio: "inherit", env: { ...process.env, DEBIAN_FRONTEND: "noninteractive" } }); return true; } catch { return false; }
+  };
+  log("Chrome에 필요한 라이브러리를 설치해요(관리자 암호를 물을 수 있어요)…");
+  if (run(LIBS.map((n) => (T64.has(n) ? n + "t64" : n)))) return true;
+  return run(LIBS);
+}
+
+module.exports = { findChrome, downloadChrome, checkChrome, installLinuxLibs, platformKey };
