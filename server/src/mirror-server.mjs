@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import net from 'node:net';
 import tls from 'node:tls';
 import { writeFileSync } from 'node:fs';
@@ -32,15 +32,24 @@ export async function startMirror(o) {
   const chrome = await launchChrome({ bin: o.chromeBin, userDataDir: o.userDataDir });
   const cdp = await CDP.connect(chrome.wsUrl);
   const page = await openPage(cdp);
+  await page.send('Performance.enable').catch(() => {}); // 상태 페이지의 메모리·노드 수
   const clients = new Set();
   let current = null; // 지금 탭을 쓰는 폰 { sid, res }
   const bye = (c) => { clients.delete(c.res); c.res.end('event: bye\ndata: {}\n\n'); };
 
   // 서버 → 폰 메시지: { f: 프레임 키, ops: [...] }. 최상위 프레임 키는 'top'.
   const dbg = process.env.PARLOR_DEBUG ? (...a) => console.error('[dbg]', ...a) : () => {};
+  // 상태(/__parlor/stats): 최근 1분 동안 폰으로 보낸 양과 종류, 최근 입력 처리 시간
+  const stats = { sent: [], events: [] };
+  const statSent = (bytes, kind) => {
+    const now = Date.now();
+    stats.sent.push([now, bytes, kind]);
+    while (stats.sent.length && stats.sent[0][0] < now - 60000) stats.sent.shift();
+  };
   const broadcast = (f, opsJson) => {
     dbg('보냄', f, opsJson.slice(0, 80));
     const line = `data: {"f":${JSON.stringify(f)},"ops":${opsJson}}\n\n`;
+    statSent(line.length, opsJson.slice(0, 40).match(/"op":"(\w+)"/)?.[1] || '?');
     for (const res of clients) res.write(line);
   };
 
@@ -382,6 +391,21 @@ export async function startMirror(o) {
   }
 
   const blobCache = new Map();
+  // blob 그림 가져오기: 한 번에 2개까지, 같은 그림은 한 번만
+  const blobInflight = new Map();
+  let blobActive = 0;
+  const blobWait = [];
+  async function blobLimited(u) {
+    if (blobCache.has(u)) return blobCache.get(u);
+    if (blobInflight.has(u)) return blobInflight.get(u);
+    const p = (async () => {
+      if (blobActive >= 2) await new Promise((r) => blobWait.push(r));
+      blobActive++;
+      try { return await getBlob(u); } finally { blobActive--; blobWait.shift()?.(); blobInflight.delete(u); }
+    })();
+    blobInflight.set(u, p);
+    return p;
+  }
   async function getBlob(u) {
     if (blobCache.has(u)) return blobCache.get(u);
     // blob: 주소는 만든 프레임에서만 읽힌다(샌드박스 프레임은 origin이 null). 최상위부터 차례로 시도.
@@ -413,8 +437,14 @@ export async function startMirror(o) {
   const sessionOf = (req) => (req.headers.cookie || '').match(/(?:^|;\s*)parlor_session=([A-Za-z0-9_-]+)/)?.[1];
   const loggedIn = (req) => sessions.has(sessionOf(req));
   let lastFail = 0;
-  async function checkPassword(password) {
+  async function checkPassword(typed) {
     // 반환: 'ok' | 'wrong' | 'error'. 리수에 비밀번호가 없으면(Password not set) 확인 없이 통과.
+    // 리수 화면은 친 비밀번호를 그대로 보내지 않고 리수 서버의 /api/crypto로 해시(SHA-256 hex)한 값을 보낸다 → 똑같이 한다.
+    // /api/crypto가 없는 호스트면 여기서 SHA-256을 계산한다.
+    let password = '';
+    const h = await fetch(new URL('/api/crypto', target), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data: typed }) }).catch(() => null);
+    if (h && h.ok) password = (await h.text()).trim();
+    if (!/^[0-9a-f]{64}$/i.test(password)) password = createHash('sha256').update(typed, 'utf8').digest('hex');
     const r = await fetch(new URL('/api/login', target), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) }).catch(() => null);
     if (!r) return 'error';
     const j = await r.json().catch(() => ({}));
@@ -518,7 +548,11 @@ export async function startMirror(o) {
         res.writeHead(409).end();
       } else if (p === '/__parlor/event' && req.method === 'POST') {
         const ev = await readJson(req);
-        await enqueue(() => handleEvent(ev));
+        const t0 = Date.now();
+        let t1 = 0;
+        await enqueue(() => { t1 = Date.now(); return handleEvent(ev); });
+        stats.events.push({ type: ev.type, wait: t1 - t0, run: Date.now() - t1, at: new Date(t0).toISOString().slice(11, 19) });
+        if (stats.events.length > 20) stats.events.shift();
         res.writeHead(204).end();
       } else if (p === '/__parlor/clip' && req.method === 'POST') {
         const d = await readJson(req);
@@ -588,8 +622,23 @@ export async function startMirror(o) {
         const height = Math.min(Math.max(v.h | 0, 200), 3000);
         await enqueue(() => page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true }));
         res.writeHead(204).end();
+      } else if (p === '/__parlor/stats') {
+        const byKind = {};
+        let total = 0;
+        for (const [, b, k] of stats.sent) { total += b; byKind[k] = (byKind[k] || 0) + b; }
+        const m = await page.send('Performance.getMetrics').then((r) => Object.fromEntries(r.metrics.map((x) => [x.name, x.value])), () => ({}));
+        const kb = (n) => Math.round(n / 1024) + 'KB';
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }).end(JSON.stringify({
+          '최근 1분 폰으로 보낸 양': kb(total),
+          '종류별': Object.fromEntries(Object.entries(byKind).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, kb(v)])),
+          '최근 입력(기다림·처리 ms)': stats.events.slice().reverse(),
+          '서버 리수 JS 메모리': m.JSHeapUsedSize ? Math.round(m.JSHeapUsedSize / 1048576) + 'MB' : '?',
+          '서버 리수 DOM 노드 수': m.Nodes ?? '?',
+          '연결된 폰': clients.size,
+        }, null, 2));
       } else if (p === '/__parlor/blob') {
-        const b = await enqueue(() => getBlob(url.searchParams.get('u') || ''));
+        // 읽기만 하므로 누르기 줄(enqueue)과 따로 처리한다. 그림이 많아도 누르기가 밀리지 않게.
+        const b = await blobLimited(url.searchParams.get('u') || '');
         if (!b) { res.writeHead(404).end(); return; }
         res.writeHead(200, { 'content-type': b.type, 'cache-control': 'private, max-age=31536000, immutable' }).end(b.body);
       } else {

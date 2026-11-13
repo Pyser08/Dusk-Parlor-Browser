@@ -45,6 +45,8 @@ RisuAI 호환 **혼합형 iOS/iPadOS 앱**. 화면 뼈대는 네이티브(Swift)
 - Dusk Atelier 설치 돕기(2026-11-13): 리수엔 바깥에서 플러그인 넣는 기능이 없음(설정→플러그인→+ 파일 선택뿐) → 사용자 결정: 처음 접속 때 안내 + .js 파일 창에 '최신판 넣기' 버튼(GitHub releases/latest). RisuBard는 db.plugins(켜짐 포함)가 저장 데이터라 미러 설치 = PC에도 적용. 실제 RisuBard에서 안내→+→버튼→업데이트 확인→안내 사라짐 확인. 시험 39건.
 - 사용자 서버(우분투 ARM, pm2 'risubard') 첫 설치: 받은 헤드리스 Chrome이 libatk 등 라이브러리가 없어 못 떠서 7777이 통째로 끊김. 고침: 설치 때 Chrome 실행 확인 + apt 라이브러리 자동 설치(t64 이름), 실패 시 포트 안 옮김. 미러가 Chrome을 못 띄우면 대체 서버(src/fallback.mjs)가 리스로 넘기며 1분마다 재시도. Ubuntu 24.04 ARM 컨테이너에서 확인.
   - 이어서: 라이브러리 설치 중 우분투 needrestart 창이 떠서 curl|bash에선 방향키가 안 먹음 → sudo env로 DEBIAN_FRONTEND·NEEDRESTART_MODE 넘김(needrestart 있는 우분투 컨테이너에서 창 없이 끝남 확인).
+- 로그인: 리수는 비밀번호를 /api/crypto로 SHA-256 hex 해시해서 /api/login에 보냄 → 미러도 같게(없으면 직접 계산).
+- 느림(사용자 서버, 데이터 많음, 누를 때 ~15초, PC 직접 리수는 빠름, 서버 load 0.29, Chrome 2.6GB): 원인 후보 고침 — 캔버스를 0.4초마다 전부 PNG 인코딩(바뀌지 않아도) → 그린 캔버스만·축소 webp·간격 조절. blob 그림을 누르기 줄과 분리. 상태 페이지 /__parlor/stats 추가. 로컬에선 누르기 처리 23ms. 사용자 서버에서 stats 확인 필요.
 - 다음(다음 대화): iOS 셸(`ios/`)이 미러 주소를 열도록 연결(Xcode·iPad 시뮬레이터 준비됨).
 - 미확인: 플러그인 창 안 입력·confirm(가짜 시험만), 응답 스트리밍 표시.
 

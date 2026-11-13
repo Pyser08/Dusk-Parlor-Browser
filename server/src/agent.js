@@ -191,18 +191,65 @@
     if (/webgl/i.test(type)) opts = { ...(opts || {}), preserveDrawingBuffer: true };
     return getCtx.call(this, type, opts);
   };
-  const canvasLast = new WeakMap();
+  // 그림을 이미지로 바꾸는(인코딩) 일은 무겁고 리수 화면을 멈추게 한다. 그래서
+  //  · 실제로 그린 캔버스만(그리기 함수를 부르면 '바뀜' 표시) 다시 만든다. 그대로 있는 캔버스는 건드리지 않는다.
+  //  · 큰 캔버스는 긴 변 1024px로 줄여서 webp로 만든다(폰은 원래 크기로 늘려 그린다).
+  //  · 계속 움직이는 캔버스는 인코딩에 걸린 시간의 8배(최소 0.4초)마다 한 번만 보낸다.
+  const dirty = new WeakSet();
+  const canvasLast = new WeakMap(); // 캔버스 → { d, next }
+  const mark = (c) => { if (c) dirty.add(c); };
+  const C2D = window.CanvasRenderingContext2D?.prototype;
+  if (C2D) {
+    for (const k of ['fillRect', 'clearRect', 'strokeRect', 'fill', 'stroke', 'drawImage', 'putImageData', 'fillText', 'strokeText', 'reset', 'roundRect', 'drawFocusIfNeeded']) {
+      const f = C2D[k];
+      if (typeof f !== 'function') continue;
+      C2D[k] = function (...a) { mark(this.canvas); return f.apply(this, a); };
+    }
+  }
+  for (const P of [window.WebGLRenderingContext?.prototype, window.WebGL2RenderingContext?.prototype]) {
+    if (!P) continue;
+    for (const k of ['drawArrays', 'drawElements', 'clear', 'drawArraysInstanced', 'drawElementsInstanced', 'drawRangeElements']) {
+      const f = P[k];
+      if (typeof f !== 'function') continue;
+      P[k] = function (...a) { mark(this.canvas); return f.apply(this, a); };
+    }
+  }
+  const BRC = window.ImageBitmapRenderingContext?.prototype;
+  if (BRC?.transferFromImageBitmap) { const f = BRC.transferFromImageBitmap; BRC.transferFromImageBitmap = function (...a) { mark(this.canvas); return f.apply(this, a); }; }
+  const shrink = document.createElement('canvas');
+  const encode = (c) => {
+    const big = Math.max(c.width, c.height);
+    let src = c;
+    if (big > 1024) {
+      const r = 1024 / big;
+      shrink.width = Math.max(1, Math.round(c.width * r));
+      shrink.height = Math.max(1, Math.round(c.height * r));
+      const g = shrink.getContext('2d');
+      g.clearRect(0, 0, shrink.width, shrink.height);
+      g.drawImage(c, 0, 0, shrink.width, shrink.height);
+      src = shrink;
+    }
+    return src.toDataURL('image/webp', 0.85);
+  };
   setInterval(() => {
+    const now = performance.now();
     for (const c of document.getElementsByTagName('canvas')) {
+      if (c === shrink) continue;
       const i = known(c);
       if (!i || !c.width || !c.height || !c.getClientRects().length) continue;
+      const last = canvasLast.get(c);
+      if (last && !dirty.has(c)) continue;          // 처음 본 캔버스는 한 번 보낸다
+      if (last && now < last.next) continue;         // 너무 자주 보내지 않는다
+      dirty.delete(c);
+      const t0 = performance.now();
       let d;
-      try { d = c.toDataURL('image/png'); } catch { continue; } // 다른 출처 그림으로 오염된 캔버스
-      if (canvasLast.get(c) === d) continue;
-      canvasLast.set(c, d);
+      try { d = encode(c); } catch { continue; } // 다른 출처 그림으로 오염된 캔버스
+      const took = performance.now() - t0;
+      canvasLast.set(c, { d, next: performance.now() + Math.max(400, took * 8) });
+      if (last && last.d === d) continue;
       emit([{ op: 'canvas', i, d }]);
     }
-  }, 400);
+  }, 200);
 
   // Chrome 전용 파일 API는 서버 화면에서만 열리므로 막아서, 리수가 input[type=file]·다운로드 링크를 쓰게 한다.
   for (const k of ['showOpenFilePicker', 'showSaveFilePicker', 'showDirectoryPicker']) {

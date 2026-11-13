@@ -3,6 +3,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { writeFileSync } from 'node:fs';
@@ -180,7 +181,8 @@ before(async () => {
       let b = '';
       req.on('data', (c) => { b += c; });
       req.on('end', () => {
-        const ok = JSON.parse(b || '{}').password === 'pw';
+        // 리수처럼 해시(SHA-256 hex)한 비밀번호만 받는다
+        const ok = JSON.parse(b || '{}').password === createHash('sha256').update('pw').digest('hex');
         res.writeHead(ok ? 200 : 400, { 'content-type': 'application/json' }).end(JSON.stringify(ok ? { status: 'success' } : { error: 'Password incorrect' }));
       });
       return;
@@ -480,6 +482,40 @@ test('소리와 TTS는 폰에서 재생하도록 전달됨', async () => {
 test('캔버스에 그린 그림이 폰에 보임', async () => {
   await tap('#draw');
   await waitFor(`(() => { const c = document.querySelector('#cv'); const d = c.getContext('2d').getImageData(20, 10, 1, 1).data; return d[0] > 200 && d[1] < 60 && d[3] > 200; })()`);
+});
+
+// 서버 페이지가 ms 동안 얼마나 길게 멈추는지(가장 긴 틈)
+const maxStall = (ms) => mirror.evaluate(`new Promise((ok) => { let last = performance.now(), max = 0; const t = setInterval(() => { const n = performance.now(); max = Math.max(max, n - last); last = n; }, 20); setTimeout(() => { clearInterval(t); ok(Math.round(max)); }, ${ms}); })`);
+
+test('그대로 있는 큰 캔버스는 다시 이미지로 만들지 않음(서버 화면이 멈추지 않음)', async () => {
+  // 리수·플러그인 화면처럼 큰 캔버스 여러 개를 한 번만 그려 둔다
+  await mirror.evaluate(`(() => { const box = document.createElement('div'); box.id = 'bigbox'; for (let k = 0; k < 4; k++) { const c = document.createElement('canvas'); c.width = c.height = 1600; c.style.cssText = 'width:40px;height:40px'; const g = c.getContext('2d'); const im = g.createImageData(1600, 1600); for (let j = 0; j < im.data.length; j++) im.data[j] = (j * 2654435761) >>> 24; g.putImageData(im, 0, 0); box.appendChild(c); } document.body.appendChild(box); })()`);
+  await new Promise((r) => setTimeout(r, 1500)); // 처음 한 번은 보내도 된다
+  const stall = await maxStall(3000);
+  assert.ok(stall < 250, `서버 화면이 ${stall}ms 멈춤`);
+});
+
+test('큰 캔버스가 계속 움직여도 누르기가 빨리 반영됨', async () => {
+  await mirror.evaluate(`(() => { document.getElementById('bigbox')?.remove(); const c = document.createElement('canvas'); c.id = 'anim'; c.width = c.height = 1600; c.style.cssText = 'width:40px;height:40px'; document.body.appendChild(c); const g = c.getContext('2d'); let k = 0; window.__anim = setInterval(() => { g.fillStyle = 'hsl(' + (k++ % 360) + ',80%,50%)'; g.fillRect(0, 0, 1600, 1600); for (let j = 0; j < 400; j++) g.fillRect((j * 37 + k) % 1600, (j * 91) % 1600, 30, 30); }, 30); })()`);
+  await new Promise((r) => setTimeout(r, 1000));
+  const times = [];
+  for (let n = 0; n < 4; n++) {
+    const before = await mirror.evaluate(`document.querySelector('#b').textContent`);
+    const t0 = Date.now();
+    await tap('#b');
+    await waitFor(`document.querySelector('#b').textContent !== ${JSON.stringify(before)}`);
+    times.push(Date.now() - t0);
+  }
+  await mirror.evaluate(`clearInterval(window.__anim); document.getElementById('anim').remove()`);
+  const avg = times.reduce((a, b) => a + b) / times.length;
+  assert.ok(avg < 800, `누르기 평균 ${Math.round(avg)}ms (${times.join(', ')})`);
+});
+
+test('상태 페이지: 보낸 양·입력 처리 시간·메모리를 보여 줌', async () => {
+  const st = await evalOn(`fetch('/__parlor/stats').then((r) => r.json())`);
+  assert.ok(st['최근 입력(기다림·처리 ms)'].length > 0);
+  assert.match(st['서버 리수 JS 메모리'], /MB$/);
+  assert.equal(typeof st['종류별'], 'object');
 });
 
 test('호버: 폰에서 마우스를 올리면 서버에서도 올라감', async () => {
