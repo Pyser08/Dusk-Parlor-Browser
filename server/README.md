@@ -21,19 +21,28 @@ PARLOR_TARGET=http://127.0.0.1:6001 PARLOR_TOKEN=비밀값 npm start
 | PARLOR_TOKEN | 없음 | 설정 시 토큰 없이는 접근 불가 (외부 공개 시 필수) |
 | PARLOR_PROFILE | server/.parlor-profile | Chrome 프로필(리수 로그인·저장소 유지) |
 | CHROME_BIN | google-chrome | Chrome 실행 파일 |
+| PARLOR_DEBUG | 없음 | 설정 시 프레임 연결·클릭·대화상자 진단 로그 출력 |
 
 의존 패키지 없음(Node 22 이상 + Chrome).
 
 ## 동작 방식
 - 서버→폰: 첫 화면 전체(`snap`) 후 `kids`(자식 목록 변경)·`attr`·`text`·`val`(입력값)·`scroll`만 전송. `<script>`·`on*` 속성은 보내지 않음.
 - 폰→서버: 클릭은 CDP 실제 마우스 입력(가려져 있으면 `el.click()`), 입력값은 조합(한글) 끝난 뒤 전송, Enter·Esc·Tab·방향키는 키 이벤트로 전달. 순서 보장을 위해 양쪽 모두 한 줄로 처리.
+- 플러그인 창 같은 iframe(샌드박스·별도 프로세스 포함)은 프레임마다 따로 미러해요. 폰에서는 스크립트가 꺼진 빈 iframe에 그려요. 설계는 [DESIGN-frames.md](DESIGN-frames.md)를 보세요.
+- `alert`/`confirm`/`prompt`는 폰에 띄우고, 폰의 답을 서버로 돌려줘요. 폰이 연결돼 있지 않으면 바로 닫아요.
+- 정적 파일 프록시는 서버 Chrome의 쿠키를 붙여 보내요(리스바드 세션 쿠키로 보호된 `/api/asset` 등).
 - `blob:` 이미지는 `/__parlor/blob`으로 서버 페이지에서 꺼내 전달. 그 밖의 정적 파일(CSS·폰트·이미지)은 리수 서버로 프록시.
 
 ## 시험
-`npm test` — 가짜 리수 페이지로 첫 화면·스크립트 차단·CSS 프록시·blob 이미지·클릭 왕복·한글 입력+Enter 전송·토큰 검사를 Chrome 두 개로 확인.
+`npm test` — 가짜 리수 페이지를 Chrome 두 개로 확인해요(14건).
+- 기본: 첫 화면, 스크립트 차단, CSS 프록시, 쿠키 필요한 파일, blob 이미지, 클릭 왕복, 한글 입력+Enter, 토큰
+- 프레임: 같은 출처 iframe, 플러그인 iframe 표시·클릭·입력·`confirm`·재접속 복원·닫기
+
+맥에서는 `CHROME_BIN="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" npm test`.
 
 ## 알려진 한계
-- 실제 리수에서는 아직 안 돌려 봄.
+- 플러그인 켜짐 상태는 브라우저마다 따로 저장돼요. 서버 Chrome의 플러그인은 미러 화면에서 켜고 꺼야 해요.
+- 헤드리스 Chrome에서 별도 프로세스 iframe에 실제 키 이벤트를 보내면 그 뒤 마우스가 iframe에 닿지 않아요. 그래서 iframe 안의 키는 그 프레임에서 `KeyboardEvent`를 직접 만들어요(`isTrusted`가 false).
 - CSSOM으로 넣은 스타일(insertRule, adoptedStyleSheets)·캔버스·Shadow DOM은 미러되지 않음 → Svelte 전환 애니메이션 정도가 빠질 수 있음.
 - 파일 업로드·다운로드·클립보드 연동, 접속자별 분리(지금은 모든 폰이 탭 하나를 공유) 미구현.
 - 드래그·길게 누르기·호버 등 클릭 외 포인터 동작 미구현.

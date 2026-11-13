@@ -13,8 +13,18 @@ RisuAI 호환 **혼합형 iOS/iPadOS 앱**. 화면 뼈대는 네이티브(Swift)
 
 ## mirror 브랜치 (2026-11-13, 새 방향 시험)
 - 서버 헤드리스 Chrome이 리수를 실행하고 폰엔 DOM 변화만 보내는 미러 방식. `server/` (설명은 server/README.md).
-- 가짜 리수 페이지 기준 종단 시험 6건 통과(`cd server && npm test`). 실제 리수 미확인.
-- 다음: 실제 리스바드 서버에 붙여 보기 → 파일 업로드·다운로드 → 접속자별 탭 분리 → iOS 셸(`ios/`)이 미러 주소를 열도록 연결.
+- 가짜 리수 페이지 기준 종단 시험 14건 통과(`cd server && CHROME_BIN=... npm test`).
+- **실제 PocketRisu(리스바드, localhost:6001)에 붙여 봄.** 로그인, 메인, 사이드바, 캐릭터 관리, 설정, 채팅 열기, 한글 입력+Enter 전송이 맥 브라우저에서 동작함.
+  - 고친 것: iframe 스냅샷이 화면을 덮어쓰던 문제(로그인 후 빈 화면), `/api/asset` 401(프록시가 HttpOnly 세션 쿠키를 안 붙임).
+  - 플러그인 창(샌드박스 iframe = 별도 프로세스) 미러링 구현 → Dusk Atelier 실제 창 표시·메뉴 이동·닫기 확인. 설계: server/DESIGN-frames.md.
+  - alert/confirm/prompt를 폰에 띄우고 답을 서버로 돌려줌.
+- 알게 된 것:
+  - 플러그인 켜짐 상태는 브라우저마다 저장됨 → 서버 Chrome 플러그인은 미러 화면에서 따로 켜고 꺼야 함.
+  - 헤드리스 Chrome에서 OOPIF에 실제 키 이벤트를 보내면 이후 마우스가 iframe에 안 닿음 → iframe 안 키는 합성 KeyboardEvent(isTrusted=false).
+  - 응답이 비던 건 미러 문제 아님: OpenRouter deepseek 추론 모델이 출력 토큰을 추론에 다 씀(finish_reason=length).
+  - 플러그인 켠 상태에서 서버 페이지 새로고침이 멈춘 적 있음. 프레임 처리 구현 후에는 재현 안 됨(원인 미확정).
+- 다음: 실제 폰(같은 와이파이 + PARLOR_TOKEN)으로 한글 IME·터치 스크롤·회전 확인 → 파일 업로드·다운로드 → 접속자별 탭 분리 → iOS 셸(`ios/`)이 미러 주소를 열도록 연결.
+- 미확인: 플러그인 창 안 입력·confirm(가짜 시험만), 응답 스트리밍 표시.
 
 ## 다음 할 일 (순서대로)
 1. 맥에서 `ios/` 첫 빌드 → 컴파일 오류 수정

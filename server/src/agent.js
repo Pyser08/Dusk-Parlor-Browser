@@ -1,9 +1,9 @@
 // 서버 Chrome의 리수 페이지 안에 주입되는 스크립트.
 // DOM을 직렬화하고, 바뀐 부분만 __parlorEmit 바인딩으로 내보낸다.
 (() => {
-  // 같은 출처 iframe(about:srcdoc 등)에도 주입되므로 최상위 문서에서만 동작한다.
-  // 그러지 않으면 iframe의 snap이 폰 화면 전체를 덮어쓴다.
-  if (window.__parlor || window !== window.top) return;
+  // 모든 프레임(플러그인 iframe 포함)에서 실행된다. 어느 프레임의 메시지인지는
+  // 서버가 바인딩 호출의 실행 맥락으로 구분해 붙인다(DESIGN-frames.md).
+  if (window.__parlor) return;
   const emit = (ops) => { if (ops.length) try { window.__parlorEmit(JSON.stringify(ops)); } catch {} };
 
   const ids = new WeakMap();
@@ -26,6 +26,9 @@
   const isField = (n) => n.tagName === 'INPUT' || n.tagName === 'TEXTAREA' || n.tagName === 'SELECT';
   const SKIP_LINK = /modulepreload|preload|prefetch|manifest/i;
   const keep = (n) => n.nodeType === 1 || n.nodeType === 3 || n.nodeType === 8;
+  // iframe 내용은 프레임별로 따로 미러하므로 원본 문서 주소(src/srcdoc)는 보내지 않는다.
+  const FRAME_ATTR = /^(src|srcdoc)$/i;
+  const dropAttr = (n, name) => /^on/i.test(name) || (n.tagName === 'IFRAME' && FRAME_ATTR.test(name));
 
   function ser(n) {
     const i = idOf(n);
@@ -42,7 +45,7 @@
       return { i, t: 8 };
     }
     const a = [];
-    for (const at of n.attributes) if (!/^on/i.test(at.name)) a.push([at.name, fix(at.value)]);
+    for (const at of n.attributes) if (!dropAttr(n, at.name)) a.push([at.name, fix(at.value)]);
     const o = { i, t: 1, n: n.localName, a, c: [] };
     if (n.namespaceURI !== 'http://www.w3.org/1999/xhtml') o.ns = n.namespaceURI;
     if (isField(n)) {
@@ -73,7 +76,7 @@
       const ti = known(t);
       if (!ti) continue;
       if (r.type === 'attributes') {
-        if (/^on/i.test(r.attributeName) || skipped.has(t)) continue;
+        if (dropAttr(t, r.attributeName) || skipped.has(t)) continue;
         const v = t.getAttribute(r.attributeName);
         ops.push({ op: 'attr', i: ti, k: r.attributeName, v: v == null ? null : fix(v) });
       } else if (r.type === 'characterData') {
@@ -159,6 +162,16 @@
   window.__parlor = {
     snap,
     node,
+    // 서버가 iframe 요소(DOM.getFrameOwner로 찾은)의 노드 id를 알아내는 데 쓴다.
+    idOf,
+    // iframe 내용 영역의 화면 좌표(클릭 좌표를 프레임 안 → 바깥으로 바꿀 때)
+    frameOffset(i) {
+      const n = node(i);
+      if (!n || !n.isConnected) return null;
+      const r = n.getBoundingClientRect();
+      const cs = getComputedStyle(n);
+      return { x: r.left + n.clientLeft + parseFloat(cs.paddingLeft), y: r.top + n.clientTop + parseFloat(cs.paddingTop) };
+    },
     // 클릭할 화면 좌표. 다른 요소에 가려져 있으면 null(→ el.click()으로 대체).
     point(i) {
       const n = node(i);
@@ -174,6 +187,17 @@
     },
     click(i) { node(i)?.click?.(); },
     focus(i) { const n = node(i); n?.focus?.(); return !!n; },
+    // 플러그인 iframe(별도 프로세스) 안의 키 입력. 헤드리스 Chrome에서 실제 키 이벤트를 OOPIF로
+    // 보내면 그 뒤 마우스 입력이 iframe에 닿지 않는 문제가 있어(DESIGN-frames.md) 이벤트를 직접 만든다.
+    key(i, k) {
+      const n = (i && node(i)) || document.activeElement || document.body;
+      n.focus?.();
+      const init = { key: k.key, code: k.key, bubbles: true, cancelable: true, composed: true,
+        shiftKey: !!k.shift, ctrlKey: !!k.ctrl, altKey: !!k.alt, metaKey: !!k.meta };
+      const go = n.dispatchEvent(new KeyboardEvent('keydown', init));
+      if (go && k.key === 'Enter' && n.tagName === 'INPUT' && n.form) n.form.requestSubmit?.();
+      n.dispatchEvent(new KeyboardEvent('keyup', init));
+    },
     apply(ev) {
       const n = ev.i ? node(ev.i) : document.scrollingElement;
       if (!n) return;

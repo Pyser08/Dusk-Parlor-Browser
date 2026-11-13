@@ -7,6 +7,20 @@ import { launchChrome } from '../src/chrome.mjs';
 import { CDP, openPage } from '../src/cdp.mjs';
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+// 리수 플러그인 v3처럼 샌드박스 srcdoc iframe으로 화면 전체를 덮는 플러그인 창
+const PLUGIN = `<html><head><style>body{margin:0;background:#fff}</style></head><body>
+<button id="pb">p:0</button><input id="pi"><ul id="pl"></ul><button id="pc">ask</button><button id="px">close</button>
+<script>
+window.__pluginRan = 1;
+let k = 0;
+pb.onclick = () => { pb.textContent = 'p:' + (++k); };
+pi.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { const li = document.createElement('li'); li.textContent = 'pm:' + pi.value; pl.appendChild(li); pi.value = ''; }
+});
+pc.onclick = () => { pc.textContent = confirm('계속?') ? 'yes' : 'no'; };
+px.onclick = () => parent.postMessage('close', '*');
+</script></body></html>`;
+
 const FIXTURE = `<!doctype html><html class="dark"><head>
 <link rel="stylesheet" href="/a.css">
 <script>window.__fixtureRan = 1</script>
@@ -17,7 +31,17 @@ const FIXTURE = `<!doctype html><html class="dark"><head>
 <img id="img">
 <img id="secure" src="/secure.png">
 <button id="frame">frame</button>
+<button id="plugin">plugin</button>
 <script>
+plugin.onclick = async () => {
+  const f = document.createElement('iframe');
+  f.id = 'plug';
+  f.setAttribute('sandbox', 'allow-scripts allow-modals allow-downloads');
+  f.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:1000;background:#fff';
+  f.srcdoc = await (await fetch('/plugin.html')).text();
+  document.body.appendChild(f);
+};
+addEventListener('message', (e) => { if (e.data === 'close') document.getElementById('plug')?.remove(); });
 frame.onclick = () => {
   const f = document.createElement('iframe');
   f.srcdoc = '<html><head><style>p{}</style><script>1<\\/script></head><body></body></html>';
@@ -59,12 +83,23 @@ const tap = async (sel) => {
   }
 };
 
+// 폰 화면의 플러그인 iframe 안 요소
+const inPlug = (sel) => `document.querySelector('#plug')?.contentDocument?.querySelector(${JSON.stringify(sel)})`;
+const tapInPlug = async (sel) => {
+  const p = await evalOn(`(() => { const f = document.querySelector('#plug').getBoundingClientRect(); const r = ${inPlug(sel)}.getBoundingClientRect(); return { x: f.left + r.left + r.width / 2, y: f.top + r.top + r.height / 2 }; })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await tab.send('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'left', clickCount: 1 });
+  }
+};
+
 before(async () => {
   fixture = http.createServer((req, res) => {
     if (req.url === '/secure.png') {
       // 리스바드처럼 HttpOnly 세션 쿠키가 있어야만 주는 파일
       if (/(?:^|;\s*)sess=ok(?:;|$)/.test(req.headers.cookie || '')) res.writeHead(200, { 'content-type': 'image/png' }).end(Buffer.from(PNG, 'base64'));
       else res.writeHead(401).end();
+    } else if (req.url === '/plugin.html') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PLUGIN);
     } else if (req.url === '/a.css') res.writeHead(200, { 'content-type': 'text/css' }).end('#b{width:200px}');
     else res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'sess=ok; Path=/; HttpOnly; SameSite=Strict' }).end(FIXTURE);
   });
@@ -75,6 +110,8 @@ before(async () => {
   tab = await openPage(phoneCdp);
   await tab.send('Runtime.enable');
   await tab.send('Page.enable');
+  // 폰에서 뜬 confirm()은 '확인'으로 답한다
+  tab.on((m) => { if (m.method === 'Page.javascriptDialogOpening') tab.send('Page.handleJavaScriptDialog', { accept: true }); });
   await tab.send('Page.navigate', { url: `http://127.0.0.1:${mirror.port}/__parlor/` });
 });
 
@@ -129,6 +166,43 @@ test('iframe이 생겨도 폰 화면이 iframe 문서로 바뀌지 않음', asyn
   await new Promise((r) => setTimeout(r, 500));
   assert.equal(await evalOn(`document.querySelector('#b')?.textContent`), 'count:2');
   assert.equal(await evalOn(`document.body?.parentNode === document.documentElement`), true);
+});
+
+test('플러그인 iframe 내용이 폰에 보이고, 플러그인 스크립트는 폰에서 실행되지 않음', async () => {
+  await tap('#plugin');
+  await waitFor(`${inPlug('#pb')}?.textContent === 'p:0'`);
+  assert.equal(await evalOn(`typeof document.querySelector('#plug').contentWindow.__pluginRan`), 'undefined');
+  assert.equal(await evalOn(`document.querySelector('#plug').getAttribute('sandbox')`), 'allow-same-origin');
+});
+
+test('플러그인 iframe 안을 누르면 서버 iframe에서 클릭되고 결과가 돌아옴', async () => {
+  await tapInPlug('#pb');
+  await waitFor(`${inPlug('#pb')}.textContent === 'p:1'`);
+});
+
+test('플러그인 iframe 안에서 한글 입력 후 Enter', async () => {
+  await tapInPlug('#pi');
+  await tab.send('Input.insertText', { text: '플러그인' });
+  await tab.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await tab.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await waitFor(`${inPlug('#pl li')}?.textContent === 'pm:플러그인'`);
+});
+
+test('플러그인의 confirm()이 폰에 뜨고, 폰의 답이 서버로 돌아감', async () => {
+  await tapInPlug('#pc');
+  await waitFor(`${inPlug('#pc')}.textContent === 'yes'`);
+});
+
+test('폰을 새로 열어도 플러그인 iframe 내용이 복원됨', async () => {
+  await tab.send('Page.reload');
+  await waitFor(`${inPlug('#pb')}?.textContent === 'p:1'`);
+});
+
+test('플러그인 창을 닫으면 폰에서도 사라지고 아래 화면을 다시 누를 수 있음', async () => {
+  await tapInPlug('#px');
+  await waitFor(`document.querySelector('#plug') === null`);
+  await tap('#b');
+  await waitFor(`document.querySelector('#b').textContent === 'count:3'`);
 });
 
 test('토큰을 설정하면 토큰 없이 접근할 수 없음', async () => {
