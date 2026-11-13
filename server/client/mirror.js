@@ -38,6 +38,7 @@
       .box b{flex:1 1 auto} a,button,label{font:inherit;color:#fff;background:#3b82f6;border:0;border-radius:8px;padding:8px 12px;text-decoration:none;cursor:pointer}
       button.x{background:#444} input[type=file]{max-width:100%;color:#ccc}
       #clip{white-space:pre-wrap;max-height:30vh;overflow:auto;flex-basis:100%;font-size:13px;color:#bbb}
+      #list{max-height:35vh;overflow:auto;display:flex;flex-direction:column;justify-content:flex-end}
     </style><div id="list"></div>`;
     const list = root.getElementById('list');
     const ensure = () => { if (!host.isConnected) document.documentElement.appendChild(host); };
@@ -54,8 +55,11 @@
       x.onclick = () => el.remove();
       el.append(x);
       list.append(el);
+      // 화면을 덮지 않게 최근 3개만 남긴다.
+      while (list.children.length > 3) list.firstElementChild.remove();
       return el;
     };
+    const autoClose = (el, ms) => setTimeout(() => el.remove(), ms);
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
     return {
       ensure,
@@ -78,7 +82,18 @@
         };
       },
       download(op) {
-        box(`<b>파일 받기</b><a href="/__parlor/download/${encodeURIComponent(op.id)}" download="${esc(op.name)}">${esc(op.name)}</a>`, 'dl-' + op.id);
+        autoClose(box(`<b>파일 받기</b><a href="/__parlor/download/${encodeURIComponent(op.id)}" download="${esc(op.name)}">${esc(op.name)}</a>`, 'dl-' + op.id), 60000);
+      },
+      notify(op) {
+        const el = box(`<b>${esc(op.title)}</b><div id="clip">${esc(op.body || '')}</div>`, null);
+        setTimeout(() => el.remove(), 8000);
+      },
+      open(url) {
+        autoClose(box(`<b>새 창</b><a href="${esc(url)}" target="_blank" rel="noopener">열기</a><div id="clip">${esc(url)}</div>`, 'open'), 60000);
+      },
+      sound(onUnlock) {
+        const el = box(`<b>소리가 있어요</b><button>소리 켜기</button>`, 'sound');
+        el.querySelector('button:not(.x)').onclick = () => { onUnlock(); el.remove(); };
       },
       clip(text) {
         const el = box(`<b>복사됨</b><div id="clip">${esc(text)}</div>`, 'clipbox');
@@ -93,6 +108,90 @@
       },
     };
   })();
+
+  // ── 소리: 서버의 재생·정지를 폰의 Web Audio로. iOS는 첫 터치 전에는 소리를 못 내므로
+  // 첫 터치에 잠금을 풀고, 그 전에 온 재생은 "소리 켜기" 버튼으로 받는다. ──
+  window.__parlorLog = [];
+  const Sound = (() => {
+    let ctx = null;
+    const playing = new Map(); // 서버 media id → { src, gain }
+    const buffers = new Map(); // src → Promise<AudioBuffer>
+    let pending = [];
+    const audio = () => (ctx ||= new (window.AudioContext || window.webkitAudioContext)());
+    const unlock = () => {
+      try { audio().resume(); } catch {}
+      try { if (window.speechSynthesis && !unlock.spoke) { unlock.spoke = true; speechSynthesis.speak(new SpeechSynthesisUtterance('')); } } catch {}
+      const p = pending;
+      pending = [];
+      for (const op of p) handle(op);
+    };
+    addEventListener('pointerdown', unlock, true);
+    const load = (src) => {
+      if (!buffers.has(src)) {
+        buffers.set(src, fetch(src).then((r) => r.arrayBuffer()).then((b) => new Promise((ok, no) => audio().decodeAudioData(b, ok, no))));
+      }
+      return buffers.get(src);
+    };
+    const stop = (m) => { const p = playing.get(m); playing.delete(m); try { p?.node?.stop(); } catch {} };
+    async function play(op) {
+      stop(op.m);
+      const rec = { src: op.src };
+      playing.set(op.m, rec);
+      const buf = await load(op.src).catch(() => null);
+      if (!buf || playing.get(op.m) !== rec) return;
+      const node = audio().createBufferSource();
+      node.buffer = buf;
+      node.loop = !!op.loop;
+      const gain = audio().createGain();
+      gain.gain.value = Number.isFinite(op.volume) ? op.volume : 1;
+      node.connect(gain).connect(audio().destination);
+      node.onended = () => { if (playing.get(op.m) === rec) playing.delete(op.m); };
+      node.start(0, Math.min(op.t || 0, buf.duration));
+      rec.node = node;
+    }
+    function speak(op) {
+      if (!window.speechSynthesis) return;
+      const u = new SpeechSynthesisUtterance(op.text);
+      if (op.lang) u.lang = op.lang;
+      u.rate = op.rate;
+      u.pitch = op.pitch;
+      u.volume = op.volume;
+      const v = op.voice && speechSynthesis.getVoices().find((x) => x.name === op.voice);
+      if (v) u.voice = v;
+      speechSynthesis.speak(u);
+    }
+    function handle(op, el) {
+      window.__parlorLog.push(op);
+      if (window.__parlorLog.length > 50) window.__parlorLog.shift();
+      // 화면에 있는 동영상은 미러된 요소를 그대로 재생
+      if (op.op === 'media' && op.video && el && el.play) return op.action === 'play' ? el.play().catch(() => {}) : el.pause();
+      if (op.op === 'media' && op.action === 'pause') return stop(op.m);
+      if (op.op === 'speak-cancel') return window.speechSynthesis?.cancel();
+      const locked = !ctx || ctx.state !== 'running';
+      if (locked && op.op === 'media') {
+        pending.push(op);
+        try { audio().resume().then(() => { if (ctx.state === 'running') unlock(); }); } catch {}
+        UI.sound(unlock);
+        return;
+      }
+      if (op.op === 'media' && op.src) play(op);
+      else if (op.op === 'speak') speak(op);
+    }
+    return { handle };
+  })();
+
+  // 캔버스: 서버가 보낸 그림을 같은 크기로 그린다.
+  function drawCanvas(c, data) {
+    if (!c || c.tagName !== 'CANVAS') return;
+    const img = new Image();
+    img.onload = () => {
+      const g = c.getContext('2d');
+      if (!g) return;
+      g.clearRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+    };
+    img.src = data;
+  }
 
   const docs = new Map(); // 프레임 키 → Doc
   const pendingOps = new Map(); // 아직 iframe과 연결 안 된 프레임의 메시지
@@ -186,9 +285,14 @@
       if (op.op === 'file') return UI.file(op);
       if (op.op === 'download') return UI.download(op);
       if (op.op === 'clip') return UI.clip(op.text);
+      if (op.op === 'notify') return UI.notify(op);
+      if (op.op === 'open') return UI.open(op.url);
+      if (op.op === 'media' || op.op === 'speak' || op.op === 'speak-cancel') return Sound.handle(op, nodes.get(op.i));
+      if (op.op === 'canvas') return drawCanvas(nodes.get(op.i), op.d);
       if (op.op === 'kids') {
         const p = nodes.get(op.p);
         if (!p) return;
+        if (inEditing(p)) { staleEdit = true; return; }
         const arr = [];
         for (const c of op.c) {
           const n = 'r' in c ? nodes.get(c.r) : build(c);
@@ -200,6 +304,7 @@
       }
       const n = nodes.get(op.i);
       if (!n) return;
+      if ((op.op === 'text' || op.op === 'attr') && inEditing(n)) { staleEdit = true; return; }
       if (op.op === 'attr') {
         if (n.nodeType !== 1 || !safeAttr(n, op.k)) return;
         if (op.v == null) n.removeAttribute(op.k);
@@ -214,6 +319,19 @@
         n.scrollTop = op.y;
       }
     }
+
+    // 지금 폰에서 편집 중인 서식 편집기(contenteditable)의 루트
+    let staleEdit = false;
+    const editHost = (n) => {
+      if (!n || !n.isContentEditable) return null;
+      let h = n.nodeType === 1 ? n : n.parentElement;
+      while (h.parentElement && h.parentElement.isContentEditable) h = h.parentElement;
+      return h;
+    };
+    const inEditing = (n) => {
+      const h = editHost(document.activeElement);
+      return !!h && (h === n || h.contains(n));
+    };
 
     function forget(n) {
       if (n.isConnected) return;
@@ -266,9 +384,72 @@
       }, true);
       document.addEventListener('submit', (e) => e.preventDefault(), true);
 
+      const sendEdit = (t) => {
+        const h = editHost(t);
+        const i = h && idOf.get(h);
+        if (i) post('event', { f: key, type: 'edit', i, v: h.textContent });
+        return !!h;
+      };
       document.addEventListener('compositionstart', () => { composing = true; }, true);
-      document.addEventListener('compositionend', (e) => { composing = false; sendVal(e.target); }, true);
-      document.addEventListener('input', (e) => { if (!composing && !e.isComposing) sendVal(e.target); }, true);
+      document.addEventListener('compositionend', (e) => { composing = false; if (!sendEdit(e.target)) sendVal(e.target); }, true);
+      document.addEventListener('input', (e) => {
+        if (composing || e.isComposing) return;
+        if (!sendEdit(e.target)) sendVal(e.target);
+      }, true);
+      // 편집을 마치면 그동안 미뤄 둔 서버 화면을 다시 받는다.
+      document.addEventListener('focusout', (e) => {
+        if (editHost(e.target) && staleEdit) { staleEdit = false; post('resnap', { f: key }); }
+      }, true);
+
+      // 우클릭(contextmenu)·길게 누르기 → 서버 우클릭
+      const ctxEvent = (t, x, y) => {
+        let n = t;
+        while (n && !idOf.has(n)) n = n.parentNode;
+        if (!n) return;
+        const ev = { f: key, type: 'context', i: idOf.get(n) };
+        const r = n.getBoundingClientRect?.();
+        if (r && r.width > 0 && r.height > 0) {
+          ev.fx = Math.min(1, Math.max(0, (x - r.left) / r.width));
+          ev.fy = Math.min(1, Math.max(0, (y - r.top) / r.height));
+        }
+        post('event', ev);
+      };
+      let lastLong = -Infinity;
+      document.addEventListener('contextmenu', (e) => {
+        if (UI.owns(e.target)) return;
+        e.preventDefault();
+        if (performance.now() - lastLong < 1500) return; // 길게 누르기로 이미 보냄
+        ctxEvent(e.target, e.clientX, e.clientY);
+      }, true);
+      let lp = null;
+      document.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse' || UI.owns(e.target)) return;
+        const t = e.target;
+        const x = e.clientX;
+        const y = e.clientY;
+        clearTimeout(lp);
+        let fired = false;
+        lp = setTimeout(() => {
+          lp = null;
+          if (drag.on) return;
+          fired = true;
+          lastLong = performance.now();
+          drag.suppress = true; // 손을 뗄 때 생기는 클릭 한 번만 버림
+          ctxEvent(t, x, y);
+        }, 550);
+        const cancel = (ev) => {
+          if (ev.type === 'pointermove' && (fired || Math.hypot(ev.clientX - x, ev.clientY - y) < 8)) return;
+          if (fired) setTimeout(() => { drag.suppress = false; }, 350);
+          clearTimeout(lp);
+          lp = null;
+          document.removeEventListener('pointermove', cancel, true);
+          document.removeEventListener('pointerup', cancel, true);
+          document.removeEventListener('pointercancel', cancel, true);
+        };
+        document.addEventListener('pointermove', cancel, true);
+        document.addEventListener('pointerup', cancel, true);
+        document.addEventListener('pointercancel', cancel, true);
+      }, true);
       document.addEventListener('change', (e) => sendVal(e.target, 'change'), true);
 
       document.addEventListener('keydown', (e) => {
@@ -301,6 +482,7 @@
         if (!drag.on) {
           if (Math.hypot(pt.x - start.x, pt.y - start.y) < 8) return;
           if (!start.mouse && performance.now() - start.t < 300) { start = null; return; }
+          if (drag.suppress) { start = null; return; } // 길게 누르기 메뉴가 이미 열림
           drag.on = true;
           post('event', { f: key, type: 'drag', phase: 'start', x: start.x, y: start.y });
         }

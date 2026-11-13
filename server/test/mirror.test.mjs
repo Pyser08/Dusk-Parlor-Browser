@@ -10,6 +10,9 @@ import { launchChrome } from '../src/chrome.mjs';
 import { CDP, openPage } from '../src/cdp.mjs';
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+// 아주 짧은 무음 WAV(8kHz, 8bit, 10샘플)
+const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.from([46, 0, 0, 0]), Buffer.from('WAVEfmt '), Buffer.from([16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0]), Buffer.from('data'), Buffer.from([10, 0, 0, 0]), Buffer.alloc(10, 128)]);
+
 // 리수 플러그인 v3처럼 샌드박스 srcdoc iframe으로 화면 전체를 덮는 플러그인 창
 const PLUGIN = `<html><head><style>body{margin:0;background:#fff}</style></head><body>
 <button id="pb">p:0</button><input id="pi"><ul id="pl"></ul><button id="pc">ask</button><button id="px">close</button>
@@ -28,7 +31,7 @@ const FIXTURE = `<!doctype html><html class="dark"><head>
 <link rel="stylesheet" href="/a.css">
 <script>window.__fixtureRan = 1</script>
 </head><body>
-<div id="io">
+<div id="io" style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">
 <button id="pick">pick</button><span id="picked">-</span>
 <button id="save">save</button>
 <button id="copy">copy</button>
@@ -39,6 +42,10 @@ const FIXTURE = `<!doctype html><html class="dark"><head>
 <div id="pad" style="position:relative;width:300px;height:60px;background:#eef">
   <div id="cover" style="position:absolute;left:0;top:0;width:200px;height:60px;background:#fcc"></div>
 </div><span id="padcount">pad:0</span>
+<div id="ce" contenteditable="true" style="min-height:20px;width:200px;border:1px solid #999"></div><span id="ceout">-</span>
+<div id="ctx" style="width:120px;height:30px;background:#cfc">ctx</div><span id="ctxout">ctx:0</span>
+<button id="win">win</button><button id="noti">noti</button><button id="snd">snd</button>
+<canvas id="cv" width="40" height="20" style="border:1px solid #000"></canvas><button id="draw">draw</button>
 </div>
 <button id="b">count:0</button>
 <ul id="list"></ul>
@@ -88,6 +95,16 @@ for (const li of dl.children) {
   li.addEventListener('dragover', (e) => e.preventDefault());
   li.addEventListener('drop', (e) => { e.preventDefault(); if (dragged && dragged !== li) { li.after(dragged); order(); } });
 }
+ce.addEventListener('input', () => { ceout.textContent = ce.textContent; });
+let cx = 0;
+ctx.addEventListener('contextmenu', (e) => { e.preventDefault(); ctxout.textContent = 'ctx:' + (++cx); });
+win.onclick = () => window.open('/newpage');
+noti.onclick = () => new Notification('완료', { body: '응답 도착' });
+snd.onclick = () => {
+  new Audio('/beep.wav').play().catch(() => {});
+  speechSynthesis.speak(new SpeechSynthesisUtterance('안녕하세요'));
+};
+draw.onclick = () => { const g = cv.getContext('2d'); g.fillStyle = '#f00'; g.fillRect(0, 0, 40, 20); };
 // 리수의 배경 닫기처럼 pointerdown으로만 반응하고, 가운데는 다른 요소에 가려진 큰 요소
 let pc = 0;
 pad.addEventListener('pointerdown', (e) => { if (e.target === pad) padcount.textContent = 'pad:' + (++pc); });
@@ -144,6 +161,10 @@ before(async () => {
       // 리스바드처럼 HttpOnly 세션 쿠키가 있어야만 주는 파일
       if (/(?:^|;\s*)sess=ok(?:;|$)/.test(req.headers.cookie || '')) res.writeHead(200, { 'content-type': 'image/png' }).end(Buffer.from(PNG, 'base64'));
       else res.writeHead(401).end();
+    } else if (req.url === '/beep.wav') {
+      res.writeHead(200, { 'content-type': 'audio/wav' }).end(WAV);
+    } else if (req.url === '/newpage') {
+      res.writeHead(200, { 'content-type': 'text/html' }).end('<p>new</p>');
     } else if (req.url === '/plugin.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PLUGIN);
     } else if (req.url === '/a.css') res.writeHead(200, { 'content-type': 'text/css' }).end('#b{width:200px}');
@@ -155,6 +176,7 @@ before(async () => {
   phoneCdp = await CDP.connect(phone.wsUrl);
   tab = await openPage(phoneCdp);
   await tab.send('Runtime.enable');
+  if (process.env.PHONE_LOG) tab.on((m) => { if (m.method === 'Runtime.exceptionThrown' || (m.method === 'Runtime.consoleAPICalled' && m.params.type !== 'log')) console.error('[폰]', JSON.stringify(m.params).slice(0, 300)); });
   await tab.send('Page.enable');
   // 폰에서 뜬 confirm()은 '확인'으로 답한다
   tab.on((m) => { if (m.method === 'Page.javascriptDialogOpening') tab.send('Page.handleJavaScriptDialog', { accept: true }); });
@@ -327,6 +349,57 @@ test('드래그로 순서 바꾸기: 폰에서 끌면 서버에서 실제 드래
   }
   await tab.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: b.x, y: b.y + 8, button: 'left', buttons: 0, clickCount: 1 });
   await waitFor(`document.querySelector('#dorder').textContent === 'BA'`);
+});
+
+test('서식 편집기(contenteditable)에 친 글자가 서버로 감', async () => {
+  await evalOn(`document.querySelector('#ce').focus()`);
+  await tab.send('Input.insertText', { text: '편집됨' });
+  await waitFor(`document.querySelector('#ceout').textContent === '편집됨'`);
+  await evalOn(`document.querySelector('#ce').blur()`);
+});
+
+test('우클릭 메뉴(contextmenu)가 서버로 감', async () => {
+  const p = await evalOn(`(() => { const r = document.querySelector('#ctx').getBoundingClientRect(); return { x: r.left + 20, y: r.top + 10 }; })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await tab.send('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'right', clickCount: 1 });
+  }
+  await waitFor(`document.querySelector('#ctxout').textContent === 'ctx:1'`);
+});
+
+test('길게 누르기는 서버에서 우클릭(contextmenu)', async () => {
+  const p = await evalOn(`(() => { const r = document.querySelector('#ctx').getBoundingClientRect(); return { x: r.left + 20, y: r.top + 10 }; })()`);
+  await tab.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  try {
+    await tab.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: p.x, y: p.y }] });
+    await new Promise((r) => setTimeout(r, 800));
+    await tab.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await waitFor(`document.querySelector('#ctxout').textContent === 'ctx:2'`);
+    await new Promise((r) => setTimeout(r, 600));
+    assert.equal(await evalOn(`document.querySelector('#ctxout').textContent`), 'ctx:2'); // 한 번만
+  } finally {
+    await tab.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  }
+});
+
+test('새 창(window.open)은 폰에서 열 수 있는 링크로 옴', async () => {
+  await tap('#win');
+  await waitFor(`(${ui('a[target=_blank]')}?.href || '').endsWith('/newpage')`);
+});
+
+test('알림(Notification)이 폰 안내 화면에 뜸', async () => {
+  await tap('#noti');
+  await waitFor(`(document.querySelector('#__parlor-ui')?.shadowRoot?.textContent || '').includes('응답 도착')`);
+});
+
+test('소리와 TTS는 폰에서 재생하도록 전달됨', async () => {
+  await tap('#snd');
+  await waitFor(`(window.__parlorLog || []).some((o) => o.op === 'media' && o.action === 'play' && o.src.endsWith('/beep.wav'))`);
+  await waitFor(`(window.__parlorLog || []).some((o) => o.op === 'speak' && o.text === '안녕하세요')`);
+});
+
+test('캔버스에 그린 그림이 폰에 보임', async () => {
+  await tap('#draw');
+  await waitFor(`(() => { const c = document.querySelector('#cv'); const d = c.getContext('2d').getImageData(20, 10, 1, 1).data; return d[0] > 200 && d[1] < 60 && d[3] > 200; })()`);
 });
 
 test('토큰을 설정하면 토큰 없이 접근할 수 없음', async () => {

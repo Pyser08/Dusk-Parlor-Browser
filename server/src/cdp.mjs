@@ -61,5 +61,5 @@ export function session(cdp, sessionId) {
 export async function openPage(cdp, url = 'about:blank') {
   const { targetId } = await cdp.send('Target.createTarget', { url });
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
-  return session(cdp, sessionId);
+  return { ...session(cdp, sessionId), targetId };
 }

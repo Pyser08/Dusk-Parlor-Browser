@@ -120,6 +120,75 @@
     }
     return exec.call(this, cmd, ...rest);
   };
+  // 알림: 서버 화면이 아니라 폰 안내 화면에 띄운다.
+  class ParlorNotification extends EventTarget {
+    constructor(title, opts = {}) {
+      super();
+      this.title = String(title);
+      this.body = String(opts.body ?? '');
+      emit([{ op: 'notify', title: this.title, body: this.body }]);
+    }
+    close() {}
+    static get permission() { return 'granted'; }
+    static requestPermission(cb) { cb?.('granted'); return Promise.resolve('granted'); }
+  }
+  try { window.Notification = ParlorNotification; } catch {}
+
+  // 소리: 서버 Chrome은 소리가 꺼져 있으므로 재생·정지를 폰에 알려 폰에서 재생한다.
+  // 원래 재생도 그대로 둬서 ended 같은 이벤트에 기대는 앱 로직은 그대로 돈다.
+  const mediaIds = new WeakMap();
+  let nextMedia = 1;
+  const mediaId = (el) => { let m = mediaIds.get(el); if (!m) { m = nextMedia++; mediaIds.set(el, m); } return m; };
+  const phoneUrl = (u) => {
+    if (!u) return '';
+    if (u.startsWith(location.origin + '/')) return u.slice(location.origin.length);
+    return fix(u);
+  };
+  const MP = HTMLMediaElement.prototype;
+  const origPlay = MP.play;
+  const origPause = MP.pause;
+  MP.play = function () {
+    emit([{ op: 'media', m: mediaId(this), i: known(this), action: 'play', src: phoneUrl(this.currentSrc || this.src),
+      loop: !!this.loop, volume: this.muted ? 0 : this.volume, t: this.currentTime || 0, video: this.tagName === 'VIDEO' }]);
+    return origPlay.call(this);
+  };
+  MP.pause = function () {
+    emit([{ op: 'media', m: mediaId(this), i: known(this), action: 'pause' }]);
+    return origPause.call(this);
+  };
+  // TTS
+  if (window.SpeechSynthesis) {
+    const sp = SpeechSynthesis.prototype.speak;
+    const sc = SpeechSynthesis.prototype.cancel;
+    SpeechSynthesis.prototype.speak = function (u) {
+      emit([{ op: 'speak', text: String(u?.text ?? ''), lang: u?.lang || '', rate: u?.rate ?? 1, pitch: u?.pitch ?? 1, volume: u?.volume ?? 1, voice: u?.voice?.name || '' }]);
+      try { return sp.call(this, u); } catch {}
+    };
+    SpeechSynthesis.prototype.cancel = function () {
+      emit([{ op: 'speak-cancel' }]);
+      return sc.call(this);
+    };
+  }
+
+  // 캔버스: 그림은 DOM에 없으므로 바뀔 때마다 이미지로 보낸다. WebGL은 그린 뒤에도 읽을 수 있게 한다.
+  const getCtx = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type, opts) {
+    if (/webgl/i.test(type)) opts = { ...(opts || {}), preserveDrawingBuffer: true };
+    return getCtx.call(this, type, opts);
+  };
+  const canvasLast = new WeakMap();
+  setInterval(() => {
+    for (const c of document.getElementsByTagName('canvas')) {
+      const i = known(c);
+      if (!i || !c.width || !c.height || !c.getClientRects().length) continue;
+      let d;
+      try { d = c.toDataURL('image/png'); } catch { continue; } // 다른 출처 그림으로 오염된 캔버스
+      if (canvasLast.get(c) === d) continue;
+      canvasLast.set(c, d);
+      emit([{ op: 'canvas', i, d }]);
+    }
+  }, 400);
+
   // Chrome 전용 파일 API는 서버 화면에서만 열리므로 막아서, 리수가 input[type=file]·다운로드 링크를 쓰게 한다.
   for (const k of ['showOpenFilePicker', 'showSaveFilePicker', 'showDirectoryPicker']) {
     try { delete Window.prototype[k]; delete window[k]; } catch {}
@@ -234,6 +303,20 @@
       if (hit && hit.tagName === 'IFRAME' && hit !== n && !n.contains(hit)) return { covered: true };
       if (!hit || !(hit === n || n.contains(hit))) return null;
       return { x, y };
+    },
+    // 폰의 서식 편집기(contenteditable)에서 친 글자. Svelte bind:textContent 등은 input 이벤트로 읽는다.
+    edit(i, v) {
+      const n = node(i);
+      if (!n) return;
+      n.focus?.();
+      n.textContent = v;
+      n.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    },
+    // 우클릭 자리를 못 구했을 때의 대체
+    context(i) {
+      let n = tapTarget(node(i));
+      if (n && n.nodeType !== 1) n = n.parentElement;
+      n?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }));
     },
     click(i) {
       let n = tapTarget(node(i));

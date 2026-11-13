@@ -213,6 +213,26 @@ export async function startMirror(o) {
   });
   await cdp.send('Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath: downloadDir, eventsEnabled: true });
 
+  // ── 새 창: 서버에서 열린 새 탭(window.open, target=_blank)은 닫고 폰에서 열 링크로 보낸다 ──
+  const openedTabs = new Set();
+  const phoneUrl = (u) => {
+    try {
+      const x = new URL(u);
+      return x.origin === target.origin ? x.pathname + x.search + x.hash : x.href;
+    } catch { return u; }
+  };
+  cdp.on((m) => {
+    if (m.sessionId || (m.method !== 'Target.targetCreated' && m.method !== 'Target.targetInfoChanged')) return;
+    const info = m.params.targetInfo;
+    if (info.type !== 'page' || info.openerId !== page.targetId || openedTabs.has(info.targetId)) return;
+    if (!info.url || info.url === 'about:blank') return; // 주소가 정해지면 다시 온다
+    openedTabs.add(info.targetId);
+    dbg('새 창', info.url);
+    broadcast('top', JSON.stringify([{ op: 'open', url: phoneUrl(info.url) }]));
+    cdp.send('Target.closeTarget', { targetId: info.targetId }).catch(() => {});
+  });
+  await cdp.send('Target.setDiscoverTargets', { discover: true });
+
   // ── 드래그(네이티브 드래그 앤 드롭은 가로채서 드래그 이벤트로 이어 간다) ──
   const drag = { data: null, x: 0, y: 0 };
 
@@ -280,6 +300,19 @@ export async function startMirror(o) {
       // rawKeyDown: 문자 입력 없이 키 처리기만 실행(값은 따로 동기화됨)
       await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
       await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+    } else if (ev.type === 'edit') {
+      await evaluate(`__parlor.edit(${i}, ${JSON.stringify(String(ev.v ?? ''))})`, key);
+    } else if (ev.type === 'context') {
+      dbg('우클릭', key, i, ev.fx, ev.fy);
+      const fx = Number.isFinite(+ev.fx) ? +ev.fx : 'undefined';
+      const fy = Number.isFinite(+ev.fy) ? +ev.fy : 'undefined';
+      const local = await evaluate(`__parlor.point(${i}, ${fx}, ${fy})`, key);
+      if (local?.covered) return;
+      const p = local && await toTop(key, local);
+      if (!p) return evaluate(`__parlor.context(${i})`, key);
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+      await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'right', buttons: 2, clickCount: 1 });
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'right', buttons: 0, clickCount: 1 });
     } else if (ev.type === 'drag') {
       const p = await toTop(key, { x: +ev.x || 0, y: +ev.y || 0 });
       if (!p) return;
