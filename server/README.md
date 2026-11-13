@@ -8,6 +8,22 @@
                          ▲  CDP 클릭·키 입력                     ◀─POST─ 터치·입력·스크롤
 ```
 
+## 리스 폴더에 넣어서 설치 (Dusk Cellar와 같은 방식)
+| 환경 | 방법 |
+|---|---|
+| 윈도우 | `install.bat`을 **리스 폴더**(`server\node\server.cjs`가 있는 곳)에 넣고 더블클릭 |
+| 맥 | `install.command`를 리스 폴더에 넣고 더블클릭(처음 한 번은 우클릭 → 열기) |
+| 리눅스 | 리스 폴더에서 `curl -fsSL https://raw.githubusercontent.com/Pyser08/Dusk-Parlor-Browser/mirror/server/install.sh \| bash` |
+
+- 리스 폴더 안 `Dusk-Parlor/`에 설치돼요. 다시 실행하면 최신으로 바뀌어요(`data/`·`parlor.json`은 그대로).
+- Node는 리스의 `bin/node`(휴대용 배포본)를 먼저 쓰고, 없으면 시스템 Node 22 이상을 써요. git은 필요 없어요.
+- Chrome: 설치된 Chrome(윈도우는 Edge도)을 쓰고, 없으면 Google의 Chrome for Testing 헤드리스 판을 `Dusk-Parlor/chrome/`에 받아요(관리자 권한 불필요).
+- **pm2가 있으면:** 리스(또는 Dusk Cellar 실행기)를 켜던 pm2 항목은 그대로 두고 포트만 7778로 옮긴 뒤, 미러를 따로 pm2 `dusk-parlor`로 7777에 등록해요. 미러는 리스가 응답할 때까지 기다렸다 켜져서 재부팅 때 순서가 섞여도 괜찮아요.
+- **pm2가 없으면(휴대용 등):** 리스 폴더에 `start_parlor.command`(맥)·`start_parlor.bat`(윈도우)·`start_parlor.sh`(리눅스)를 만들어요. 이걸로 켜면 리스(Cellar가 있으면 Cellar 실행기)가 7778, 미러가 7777로 함께 켜지고 함께 꺼져요. 미러만 죽으면 미러만 다시 켜요. Chrome이나 Node 22가 없으면 미러 없이 리스를 원래 포트로 켜요.
+- 옵션: `--no-pm2`, `--port 7777`, `--risu-port 7778`. 설정은 `Dusk-Parlor/parlor.json`.
+- 결과: PC는 `http://<서버>:7777/`(리스 그대로), 폰은 `http://<서버>:7777/__parlor/`.
+- Dusk Cellar 실행기는 리스에 `PORT`를 그대로 넘겨서 함께 돌아요.
+
 ## 실행
 ```
 cd server

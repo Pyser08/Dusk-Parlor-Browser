@@ -6,8 +6,10 @@ import path from 'node:path';
 // 헤드리스 Chrome을 띄우고 DevTools 주소를 돌려준다.
 export async function launchChrome({ bin, userDataDir, extraArgs = [] } = {}) {
   const dir = userDataDir || mkdtempSync(path.join(os.tmpdir(), 'parlor-chrome-'));
+  const exe = bin || process.env.CHROME_BIN || 'google-chrome';
   const args = [
-    '--headless=new',
+    // Chrome for Testing의 헤드리스 전용 판(chrome-headless-shell)은 원래 헤드리스라 '=new'를 쓰지 않는다
+    /headless-shell/i.test(path.basename(exe)) ? '--headless' : '--headless=new',
     '--remote-debugging-port=0',
     `--user-data-dir=${dir}`,
     '--no-first-run',
@@ -20,7 +22,7 @@ export async function launchChrome({ bin, userDataDir, extraArgs = [] } = {}) {
     ...extraArgs,
     'about:blank',
   ];
-  const proc = spawn(bin || process.env.CHROME_BIN || 'google-chrome', args, {
+  const proc = spawn(exe, args, {
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   const wsUrl = await new Promise((res, rej) => {

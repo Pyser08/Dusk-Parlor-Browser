@@ -6,6 +6,14 @@ if (!target) {
   process.exit(1);
 }
 
+// pm2가 리스와 미러를 동시에 켜면(재부팅 등) 리스가 아직 안 떠 있을 수 있다 → 응답할 때까지 기다린다
+for (let i = 0; ; i++) {
+  const ok = await fetch(target, { redirect: 'manual', signal: AbortSignal.timeout(3000) }).then(() => true, () => false);
+  if (ok) break;
+  if (i === 0) console.log(`[parlor] 리스(${target}) 기다리는 중…`);
+  await new Promise((r) => setTimeout(r, 1000));
+}
+
 const m = await startMirror({
   target,
   port: Number(process.env.PARLOR_PORT || 7300),

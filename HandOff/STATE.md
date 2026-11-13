@@ -39,6 +39,9 @@ RisuAI 호환 **혼합형 iOS/iPadOS 앱**. 화면 뼈대는 네이티브(Swift)
 - 접속자 처리 결정·구현(2026-11-13): 접속자별 탭 분리는 안 함(리수 DB 통째 저장이라 덮어쓰기 위험). 탭 하나를 한 폰만 쓰고, 새로 연 폰이 이전 폰을 끊음(sid, `bye` 이벤트, 이전 폰 POST 409, "여기서 다시 열기"). 시험 33건, 실제 RisuBard에서도 확인.
 - 주소·로그인(2026-11-13): 토큰 제거. `/__parlor/`만 미러, 나머지는 리수로 그대로 넘김(웹소켓 포함) → 리수를 안쪽 포트로 옮기고 미러를 7777에 두면 주소 하나로 PC·폰. 미러는 처음 한 번 리수 비밀번호를 리수 `/api/login`으로 확인. nginx 뒤 SSE 버퍼링 끔(X-Accel-Buffering). 시험 36건.
   - 사용자는 duckdns + nginx로 밖에서 접속 예정. 실기: RisuBard 대상 로그인 화면·틀린 비번 거절·리수 바로 넘기기 확인. `.parlor-test-password`는 지금 RisuBard 비번과 달라 맞는 비번 로그인은 미확인.
+- 설치 자동화(2026-11-13): Dusk Cellar처럼 리스 폴더에 install.sh/.command/.bat을 넣으면 `리스/Dusk-Parlor/`에 설치(`parlor-setup.cjs`). Chrome은 설치된 것 → 없으면 Chrome for Testing 헤드리스 판 받기(`chrome-get.cjs`). pm2가 있으면 리스(Cellar) 항목은 포트만 7778로, 미러는 별도 pm2 `dusk-parlor`(사용자 요청). pm2가 없으면 start_parlor 실행 파일 + 함께 켜는 실행기(`parlor-start.cjs`).
+  - 확인: 맥(가짜 리스+가짜 Cellar, pm2 없이, 시스템 Chrome), Debian ARM 컨테이너(pm2, apt chromium: 설치·재설치·pm2 resurrect). 미확인: 윈도우 전체, Chrome for Testing 받은 판으로 실행(이 맥에서 받은 실행 파일 실행이 권한 검사에 막힘), 실제 RisuBard, GitHub에서 받는 설치(푸시 전).
+  - 푸시: mirror 브랜치, 태그 mirror-v0.1.0. 이 맥의 git 토큰엔 workflow 권한이 없어 릴리즈 워크플로는 못 올림(릴리즈는 웹에서 수동).
 - 다음(다음 대화): iOS 셸(`ios/`)이 미러 주소를 열도록 연결(Xcode·iPad 시뮬레이터 준비됨).
 - 미확인: 플러그인 창 안 입력·confirm(가짜 시험만), 응답 스트리밍 표시.
 
